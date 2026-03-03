@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4" main_tree_to_execute="BehaviorTree">
+  <BehaviorTree ID="BehaviorTree">
+    <ReactiveSequence>
+      <!-- 1. 获取全局代价地图与视觉目标 -->
+      <SubGlobalCostmap topic_name="global_costmap/costmap" global_costmap="{global_costmap}"/>
+      <SubTarget topic_name="tracker/target" target="{@tracker_target}"/>
+      
+      <Fallback>
+        <!-- 2. 正常追击分支 -->
+        <!-- 注意：这里不再需要 RateController。SendNav2Goal 会自动保持 RUNNING 状态阻塞频率 -->
+        <Sequence>
+          <!-- 算出包围圈上的安全攻击点 -->
+          <CalculateAttackPose topic_name="attack_markers"
+                               message="{global_costmap}" 
+                               tracker_port="{@tracker_target}" 
+                               goal="{attack_pose}"/>
+          
+          <!-- 发送目标给 Nav2 (使用新写的 Action Client 节点) -->
+          <SendNav2Goal goal="{attack_pose}"/>
+        </Sequence>
+
+        <!-- 3. 备用分支：找不到敌人或算不出安全点时，原地休眠等待 0.1 秒 -->
+        <Sleep msec="100"/>
+      </Fallback>
+    </ReactiveSequence>
+  </BehaviorTree>
+
+  <!-- 节点模型描述 (供 Groot2 识别节点和端口格式使用) -->
+  <TreeNodesModel>
+    <Action ID="CalculateAttackPose" editable="true">
+      <input_port name="message" default="{global_costmap}"/>
+      <input_port name="tracker_port" default="{@tracker_target}"/>
+      <output_port name="goal" default="{attack_pose}"/>
+      <input_port name="topic_name" default="attack_markers"/>
+    </Action>
+    <Action ID="SendNav2Goal" editable="true">
+      <input_port name="goal" default="{attack_pose}"/>
+    </Action>
+    <Action ID="SubGlobalCostmap" editable="true">
+      <input_port name="topic_name" default="global_costmap/costmap"/>
+      <output_port name="global_costmap" default="{global_costmap}"/>
+    </Action>
+    <Action ID="SubTarget" editable="true">
+      <input_port name="topic_name" default="tracker/target"/>
+      <output_port name="target" default="{@tracker_target}"/>
+    </Action>
+  </TreeNodesModel>
+</root>

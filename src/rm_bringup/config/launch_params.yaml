@@ -1,0 +1,7 @@
+odom2camera:
+  xyz: "\"0.0  0.0  0.0\""
+  rpy: "\"0.0  0.0  0.0\""
+
+namespace: ''
+virtual_serial: 0
+camera: 'hik'

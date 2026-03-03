@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="BehaviorTree">
+    <ReactiveSequence>
+      <SubArmors topic_name="/detector/armors"
+                 armors="{armors}"/>
+      <WhileDoElse>
+        <IsAttaked message="{robot_status}"/>
+        <RateController hz="1">
+          <PrintMessage message_to_print="1"/>
+        </RateController>
+        <ReactiveSequence>
+          <RateController hz="1">
+            <SendGoal name="Home"
+                      goal_pose="0;10.8;0; 0;0;0;1"
+                      action_name="navigate_to_pose"/>
+          </RateController>
+          <RobotControl stop_gimbal_scan="False"
+                        chassis_spin_vel="0.0"/>
+          <PrintMessage message_to_print="1"/>
+          <WhileDoElse>
+            <IsDetectEnemy message="{armors}"/>
+            <PrintMessage message_to_print="2"/>
+            <CanFire friction_wheel_scan="True"/>
+          </WhileDoElse>
+        </ReactiveSequence>
+      </WhileDoElse>
+    </ReactiveSequence>
+  </BehaviorTree>
+
+  <!-- Description of Node Models (used by Groot) -->
+  <TreeNodesModel>
+    <Action ID="CanFire"
+            editable="true">
+      <input_port name="friction_wheel_scan"
+                  default="True"/>
+    </Action>
+    <Action ID="IsAttaked"
+            editable="true">
+      <input_port name="message"
+                  default="{robot_status}"/>
+    </Action>
+    <Action ID="IsDetectEnemy"
+            editable="true">
+      <input_port name="message"
+                  default="{armors}"/>
+    </Action>
+    <Action ID="PrintMessage"
+            editable="true">
+      <input_port name="message_to_print"
+                  default="Hello,World!"/>
+    </Action>
+    <Decorator ID="RateController">
+      <input_port name="hz">Rate</input_port>
+    </Decorator>
+    <Action ID="RobotControl"
+            editable="true">
+      <input_port name="stop_gimbal_scan"
+                  default="True"/>
+      <input_port name="chassis_spin_vel"
+                  default="0.0"/>
+    </Action>
+    <Action ID="SendGoal"
+            editable="true">
+      <input_port name="goal_pose"
+                  default="0;0;0; 0;0;0;1"/>
+      <input_port name="action_name"
+                  default="navigate_to_pose"/>
+    </Action>
+    <Action ID="SubArmors"
+            editable="true">
+      <input_port name="topic_name"
+                  default="/detector/armors"/>
+      <output_port name="armors"
+                   default="{armors}"/>
+    </Action>
+  </TreeNodesModel>
+
+</root>

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="Untitled">
+    <Sequence>
+      <SendGoal goal_pose="4.24;0.29;0; 0;0;0;1"
+                action_name="navigate_to_pose"/>
+      <SendGoal goal_pose="4.04;2.43;0; 0;0;0;1"
+                action_name="navigate_to_pose"/>
+      <SendGoal goal_pose="0.5;2.8;0; 0;0;0;1"
+                action_name="navigate_to_pose"/>
+      <SendGoal goal_pose="0;0;0; 0;0;0;1"
+                action_name="navigate_to_pose"/>
+    </Sequence>
+  </BehaviorTree>
+
+  <!-- Description of Node Models (used by Groot) -->
+  <TreeNodesModel>
+    <Action ID="SendGoal"
+            editable="true">
+      <input_port name="goal_pose"
+                  default="0;0;0; 0;0;0;1"/>
+      <input_port name="action_name"
+                  default="navigate_to_pose"/>
+    </Action>
+  </TreeNodesModel>
+
+</root>

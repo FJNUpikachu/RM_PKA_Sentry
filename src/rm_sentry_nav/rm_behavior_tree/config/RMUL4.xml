@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="Untitled">
+    <ReactiveSequence>
+      <!-- 基础状态订阅 -->
+      <SubGameStatus topic_name="game_status"
+                     game_status="{game_status}"/>
+      <SubRobotStatus topic_name="robot_status"
+                      robot_status="{robot_status}"/>
+      <SubRfidStatus topic_name="rfid_status"
+                     rfid_status="{rfid_status}"/>
+      
+      <!-- 新增：追击所需的状态订阅（代价地图与视觉目标） -->
+      <SubGlobalCostmap topic_name="global_costmap/costmap"
+                        global_costmap="{global_costmap}"/>
+      <SubTarget topic_name="tracker/target"
+                 target="{@tracker_target}"/>
+
+      <WhileDoElse>
+        <IsGameTime message="{game_status}"
+                    game_progress="4"/>
+        <WhileDoElse>
+          <IsStatusBest message="{robot_status}"/>
+          <SendGoal goal_pose="5;-3.5;0; 0;0;0;1"
+                    action_name="navigate_to_pose"/>
+          <WhileDoElse>
+            <IsStatusBad message="{robot_status}"/>
+            <SendGoal goal_pose="0;0;0; 0;0;0;1"
+                      action_name="navigate_to_pose"/>
+            <WhileDoElse>
+              <!-- 当状态为 Middle 且 没有检测到 RFID 时，触发上面的 True 分支，否则触发下面的 Else 分支 -->
+              <AsyncSequence>
+                <IsStatusMiddle message="{robot_status}"/>
+                <IsRfidNotDetected message="{rfid_status}"/>
+              </AsyncSequence>
+              
+              <!-- True 分支 (rfid_status = false)：停止追击，前往指定点等待 -->
+              <SendGoal goal_pose="5;-3.5;0; 0;0;0;1"
+                        action_name="navigate_to_pose"/>
+              
+              <!-- False 分支 (rfid_status = true 且处于 Middle 状态)：开始追击 -->
+              <Fallback>
+                <Sequence>
+                  <CalculateAttackPose topic_name="attack_markers"
+                                       message="{global_costmap}"
+                                       tracker_port="{@tracker_target}"
+                                       goal="{attack_pose}"/>
+                  <SendNav2Goal goal="{attack_pose}"/>
+                </Sequence>
+                <!-- 若无法算出安全攻击点或短时丢失目标，原地轻微休眠 -->
+                <Sleep msec="100"/>
+              </Fallback>
+
+            </WhileDoElse>
+          </WhileDoElse>
+        </WhileDoElse>
+        <!-- 比赛非进行中时执行的操作 -->
+        <SendGoal goal_pose="0;0;0; 0;0;0;1"
+                  action_name="navigate_to_pose"/>
+      </WhileDoElse>
+    </ReactiveSequence>
+  </BehaviorTree>
+
+  <!-- Description of Node Models (used by Groot) -->
+  <TreeNodesModel>
+    <Action ID="IsGameTime"
+            editable="true">
+      <input_port name="message"
+                  default="{game_status}"/>
+      <input_port name="game_progress"
+                  default="4"/>
+    </Action>
+    <Action ID="IsRfidNotDetected"
+            editable="true">
+      <input_port name="message"
+                  default="{rfid_status}"/>
+    </Action>
+    <Action ID="IsStatusBad"
+            editable="true">
+      <input_port name="message"
+                  default="{robot_status}"/>
+    </Action>
+    <Action ID="IsStatusBest"
+            editable="true">
+      <input_port name="message"
+                  default="{robot_status}"/>
+    </Action>
+    <Action ID="IsStatusMiddle"
+            editable="true">
+      <input_port name="message"
+                  default="{robot_status}"/>
+    </Action>
+    <Action ID="SendGoal"
+            editable="true">
+      <input_port name="goal_pose"
+                  default="0;0;0; 0;0;0;1"/>
+      <input_port name="action_name"
+                  default="navigate_to_pose"/>
+    </Action>
+    <Action ID="SubGameStatus"
+            editable="true">
+      <input_port name="topic_name"
+                  default="game_status"/>
+      <output_port name="game_status"
+                   default="{game_status}"/>
+    </Action>
+    <Action ID="SubRfidStatus"
+            editable="true">
+      <input_port name="topic_name"
+                  default="rfid_status"/>
+      <output_port name="rfid_status"
+                   default="{rfid_status}"/>
+    </Action>
+    <Action ID="SubRobotStatus"
+            editable="true">
+      <input_port name="topic_name"
+                  default="robot_status"/>
+      <output_port name="robot_status"
+                   default="{robot_status}"/>
+    </Action>
+    
+    <!-- 以下为新增的追击相关节点定义 -->
+    <Action ID="CalculateAttackPose"
+            editable="true">
+      <input_port name="topic_name"
+                  default="attack_markers"/>
+      <input_port name="message"
+                  default="{global_costmap}"/>
+      <input_port name="tracker_port"
+                  default="{@tracker_target}"/>
+      <output_port name="goal"
+                   default="{attack_pose}"/>
+    </Action>
+    <Action ID="SendNav2Goal"
+            editable="true">
+      <input_port name="goal"
+                  default="{attack_pose}"/>
+    </Action>
+    <Action ID="SubGlobalCostmap"
+            editable="true">
+      <input_port name="topic_name"
+                  default="global_costmap/costmap"/>
+      <output_port name="global_costmap"
+                   default="{global_costmap}"/>
+    </Action>
+    <Action ID="SubTarget"
+            editable="true">
+      <input_port name="topic_name"
+                  default="tracker/target"/>
+      <output_port name="target"
+                   default="{@tracker_target}"/>
+    </Action>
+  </TreeNodesModel>
+
+</root>

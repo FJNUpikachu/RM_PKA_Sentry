@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="Untitled">
+    <ReactiveSequence>
+      <SubGlobalCostmap topic_name="global_costmap/costmap"
+                        global_costmap="{global_costmap}"/>
+      <CalculateAttackPose message="{global_costmap}"
+                           tracker_port="{@tracker_target}"
+                           goal="{attack_pose}"/>
+      <PubNav2Goal goal="{attack_pose}"
+                   topic_name="goal_pose"/>
+    </ReactiveSequence>
+  </BehaviorTree>
+
+  <!-- Description of Node Models (used by Groot) -->
+  <TreeNodesModel>
+    <Action ID="CalculateAttackPose"
+            editable="true">
+      <input_port name="message"
+                  default="{global_costmap}"/>
+      <input_port name="tracker_port"
+                  default="{@tracker_target}"/>
+      <output_port name="goal"
+                   default="{attack_pose}"/>
+    </Action>
+    <Action ID="PubNav2Goal"
+            editable="true">
+      <input_port name="goal"
+                  default="0;0;0"/>
+      <input_port name="topic_name"
+                  default="goal_pose"/>
+    </Action>
+    <Action ID="SubGlobalCostmap"
+            editable="true">
+      <input_port name="topic_name"
+                  default="global_costmap/costmap"/>
+      <output_port name="global_costmap"
+                   default="{global_costmap}"/>
+    </Action>
+  </TreeNodesModel>
+
+</root>

@@ -1,0 +1,61 @@
+/**:
+  ros__parameters:
+
+    # ── 串口硬件 ──────────────────────────────────────────────────────────────
+    port_name: "/dev/ttyACM0"
+    baudrate: 115200
+
+    # ── 时间戳补偿 ────────────────────────────────────────────────────────────
+    # TF stamp = now() - abs(timestamp_offset)
+    # 保证 armors 消息时间戳（now()）始终落在 TF buffer 覆盖范围内，
+    # 避免 tf2_filter "timestamp earlier than all data" 错误。
+    timestamp_offset: 0.006
+
+    # 调试开关：开启后通过 pkaLoggerCenter 输出原始字节/解析值/TF/话题数据
+    debug: false
+
+    # ── 串口模式 ──────────────────────────────────────────────────────────────
+    # 0 → 关闭（不开串口，发布虚拟 receive_data 并广播 TF）
+    # 1 → 实际串口（订阅 gimbal_cmd + cmd_vel，缓存后定时发送；接收真实数据）
+    # 2 → 虚拟串口（发 yaml 指定的虚拟数据；接收真实数据）
+    serial_mode: 0
+
+    # TF 父坐标系（odom → gimbal_link）
+    target_frame: "gimbal_odom"
+
+    # ── mode=1 订阅话题名（为空则不订阅，对应字段发送时自动填 0） ────────────
+    gimbal_cmd_topic: "armor_solver/cmd_gimbal"
+    cmd_vel_topic: "cmd_vel"
+    # cmd_vel 线速度缩放系数（发送前乘以此值）
+    cmd_vel_linear_scale: 0.2
+
+    # ── 频率配置 ──────────────────────────────────────────────────────────────
+    send_frequency: 100.0            # Hz，mode=1 定时发送缓存数据
+    read_frequency: 100.0            # Hz，mode=1,2 读取下位机数据
+
+    # ── mode=0 参数 ───────────────────────────────────────────────────────────
+    mock_recv_frequency: 100.0        # Hz，虚拟 receive_data 发布频率
+    # 虚拟接收数据（单位：度，与真实串口协议一致）
+    mock_mode: 0
+    mock_roll: 0.0
+    mock_pitch: 0.0
+    mock_yaw: 0.0
+    mock_chassis_imu_yaw_offset: 0.0
+
+    # ── mode=2 参数 ───────────────────────────────────────────────────────────
+    virtual_send_frequency: 100.0     # Hz，虚拟命令发送频率
+    virtual_fire_advice: true
+    virtual_pitch: 2.56
+    virtual_yaw: 55.7
+    virtual_distance: 99.67
+    virtual_linear_x: 5.7
+    virtual_linear_y: 4.3
+    virtual_angular_z: 99.2
+
+    # ── 健康管理（mode=1,2） ──────────────────────────────────────────────────
+    max_failure_count: 10            # 连续失败次数阈值
+    health_check_interval: 1.0       # 健康检查周期（秒）
+    max_restart_attempts: 0          # 最大重启次数（0=不限）
+    restart_cooldown: 2.0            # 两次重启间最短间隔（秒）
+    enable_auto_restart: true
+    restart_delay: 1000              # 重启前等待时间（毫秒）

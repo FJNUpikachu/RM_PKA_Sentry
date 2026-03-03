@@ -1,0 +1,1 @@
+uint16 current_hp # 血量
