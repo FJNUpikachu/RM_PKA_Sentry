@@ -3,7 +3,7 @@
     # ---- 相机基础参数 ----
     camera_name: narrow_stereo
     camera_info_url: package://rm_bringup/config/hik_camera_info.yaml
-    exposure_time: 7000
+    exposure_time: 4000
     gain: 15.0
 
     # ---- 内录参数 ----

@@ -29,6 +29,7 @@
 #include <geometry_msgs/msg/vector3.hpp>
 // third party
 #include <Eigen/Eigen>
+#include <vector>
 // project
 #include "rm_interfaces/msg/armors.hpp"
 #include "rm_interfaces/msg/target.hpp"
@@ -78,6 +79,10 @@ public:
 
   // 跟踪的装甲板
   Armor tracked_armor;
+
+  // test
+  // std::vector<Armor> same_id_armors;
+
   // 跟踪的装甲板标签
   std::string tracked_id;
   // 跟踪的装甲板数量

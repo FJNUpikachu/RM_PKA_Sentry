@@ -16,6 +16,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+
 #ifndef ARMOR_SOLVER_SOLVER_NODE_HPP_
 #define ARMOR_SOLVER_SOLVER_NODE_HPP_
 
@@ -57,9 +58,10 @@ private:
   void publishMarkers(const rm_interfaces::msg::Target &target_msg,
                       const rm_interfaces::msg::GimbalCmd &gimbal_cmd) noexcept;
 
+
   void setModeCallback(const std::shared_ptr<rm_interfaces::srv::SetMode::Request> request,
                        std::shared_ptr<rm_interfaces::srv::SetMode::Response> response);
-
+  
   bool debug_mode_;
 
   // Heartbeat
@@ -96,7 +98,7 @@ private:
   rclcpp::Publisher<rm_interfaces::msg::GimbalCmd>::SharedPtr gimbal_pub_;
   rclcpp::TimerBase::SharedPtr pub_timer_;
   void timerCallback();
-
+  
   // Enable/Disable Armor Solver
   bool enable_;
   rclcpp::Service<rm_interfaces::srv::SetMode>::SharedPtr set_mode_srv_;
@@ -109,9 +111,6 @@ private:
   visualization_msgs::msg::Marker armors_marker_;
   visualization_msgs::msg::Marker selection_marker_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
-
-
-
 };
 
 }  // namespace pka::auto_aim

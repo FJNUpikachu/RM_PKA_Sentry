@@ -30,6 +30,7 @@ namespace pka::auto_aim {
 ArmorSolverNode::ArmorSolverNode(const rclcpp::NodeOptions &options)
 : Node("armor_solver", options), solver_(nullptr) {
   // Register logger（注册节点）
+  PKA_REGISTER_LOGGER("armor_solver", "~/fyt2024-log", INFO);
   PKA_INFO("armor_solver", "Starting ArmorSolverNode!");
 
   // 是否为调试模式
@@ -124,8 +125,7 @@ ArmorSolverNode::ArmorSolverNode(const rclcpp::NodeOptions &options)
   // 具有 tf2 message_filter的订阅者
   // tf2 relevant
   // tf2 关系
-  tf2_buffer_ = std::make_shared<tf2_ros::Buffer>(
-      this->get_clock(), tf2::durationFromSec(30.0));
+  tf2_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
   // Create the timer interface before call to waitForTransform,
   // to avoid a tf2_ros::CreateTimerInterfaceException exception
   /*
@@ -316,15 +316,10 @@ void ArmorSolverNode::armorsCallback(const rm_interfaces::msg::Armors::SharedPtr
   {
     geometry_msgs::msg::PoseStamped ps;
     ps.header = armors_msg->header;
-    // 使用 Time(0) 即 tf2::TimePointZero，查询最新可用的 TF，而非消息时间戳对应的 TF。
-    // 原因：直接用图像原始时间戳做 transform 要求 TF buffer 里有精确插值数据，
-    //       当 TF 广播频率较低（mock 模式 50Hz）时极易失败或引入等待。
-    //       云台运动缓慢场景（<30°/s）下用最新 TF 的误差可忽略不计。
-    ps.header.stamp = rclcpp::Time(0);
     ps.pose = armor.pose;
     try 
     {
-      // 将pose转换到指定的目标坐标系target_frame_（使用最新TF）
+      // 将pose转换到指定的目标坐标系target_frame_
       armor.pose = tf2_buffer_->transform(ps, target_frame_).pose;
     } 
     // tf2::TransformException用于表示在进行坐标系转换时可能发生的错误，&ex用于记录错误信息
@@ -568,7 +563,6 @@ void ArmorSolverNode::setModeCallback(
 
   PKA_WARN("armor_solver", "Set Mode to {}", visionModeToString(mode));
 }
-
 
 }  // namespace pka::auto_aim
 

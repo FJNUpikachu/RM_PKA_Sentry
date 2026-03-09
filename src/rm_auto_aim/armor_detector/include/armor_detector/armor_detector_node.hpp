@@ -23,6 +23,7 @@
 // ros2
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/buffer_interface.h>
+#include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -44,6 +45,7 @@
 #include "armor_detector/armor_pose_estimator.hpp"
 #include "armor_detector/number_classifier.hpp"
 #include "rm_interfaces/msg/armors.hpp"
+#include "rm_interfaces/msg/target.hpp"
 #include "rm_interfaces/srv/set_mode.hpp"
 #include "rm_utils/heartbeat.hpp"
 #include "rm_utils/pkaLoggerCenter.hpp"
@@ -51,7 +53,7 @@
 namespace pka::auto_aim {
 
 // Armor Detector Node
-// Subscribe to the image topic, run the armor detection algorithm and publish
+// Subscribe to the image topic, run the armor detection alogorithm and publish
 // the detected armors
 class ArmorDetectorNode : public rclcpp::Node {
 public:
@@ -59,6 +61,8 @@ public:
 
 private:
   void imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr img_msg);
+  // void targetCallback(const rm_interfaces::msg::Target::SharedPtr
+  // target_msg);
 
   std::unique_ptr<Detector> initDetector();
 
@@ -113,18 +117,16 @@ private:
   // 图像信息的订阅者
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr img_sub_;
 
+  // Target subscription
+  // rclcpp::Subscription<rm_interfaces::msg::Target>::SharedPtr target_sub_;
+  // rm_interfaces::msg::Target::SharedPtr tracked_target_;
   std::deque<Armor> tracked_armors_;
 
-  // TF lookup（只做查询，不做广播；广播由 uart_node 负责）
+  // ReceiveData subscripiton
   std::string odom_frame_;
   Eigen::Matrix3d imu_to_camera_;
   std::shared_ptr<tf2_ros::Buffer> tf2_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf2_listener_;
-
-  // TF 初始化标志：首次成功 lookupTransform 后置为 true。
-  // 未初始化时 TF 查询失败直接跳过本帧（等待 uart_node 广播）；
-  // 已初始化后查询失败则沿用上一帧旋转矩阵，避免偶发抖动丢帧。
-  bool tf_initialized_{false};
 
   // Enable/Disable Armor Detector
   rclcpp::Service<rm_interfaces::srv::SetMode>::SharedPtr set_mode_srv_;

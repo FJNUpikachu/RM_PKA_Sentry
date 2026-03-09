@@ -173,7 +173,7 @@ void ArmorPoseEstimator::sortPnPResult(const Armor &armor,
       (angle < 0 && rpy1[2] < 0 && rpy2[2] > 0)) {
     std::swap(rvec1, rvec2);
     std::swap(tvec1, tvec2);
-    PKA_DEBUG("armor_detector", "PnP Solution 2 Selected");
+    // PKA_DEBUG("armor_detector", "PnP Solution 2 Selected");
   }
 }
 

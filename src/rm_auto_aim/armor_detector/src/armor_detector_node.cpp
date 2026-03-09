@@ -57,6 +57,7 @@
 namespace pka::auto_aim {
 ArmorDetectorNode::ArmorDetectorNode(const rclcpp::NodeOptions &options)
     : Node("armor_detector", options) {
+  PKA_REGISTER_LOGGER("armor_detector", "~/fyt2024-log", INFO);
   PKA_INFO("armor_detector", "Starting ArmorDetectorNode!");
   // Detector
   detector_ = initDetector();
@@ -73,7 +74,7 @@ ArmorDetectorNode::ArmorDetectorNode(const rclcpp::NodeOptions &options)
   // Transform initialize
   // 转换初始化
   odom_frame_ = this->declare_parameter("target_frame", "odom");
-  // imu到camera的转移矩阵
+  //imu到camera的转移矩阵
   imu_to_camera_ = Eigen::Matrix3d::Identity();
 
   // Visualization Marker Publisher
@@ -143,13 +144,20 @@ ArmorDetectorNode::ArmorDetectorNode(const rclcpp::NodeOptions &options)
 
   // 图像信息订阅者（订阅相机原始图像帧信息）
   // 订阅相机发布的图像，并进行识别即回调imageCallback()函数
+
+  // 创建图像信息的订阅
   img_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
       "image_raw", rclcpp::SensorDataQoS(),
       std::bind(&ArmorDetectorNode::imageCallback, this,
                 std::placeholders::_1));
 
-  // TF 查询初始化
-  // 注意：TF 广播由 uart_node 负责，此处只做查询
+  // 目标帧发布者 
+  // target_sub_ = this->create_subscription<rm_interfaces::msg::Target>(
+  //   "armor_solver/target",
+  //   rclcpp::SensorDataQoS(),
+  //   std::bind(&ArmorDetectorNode::targetCallback, this,
+  //   std::placeholders::_1));
+
   tf2_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
   // 传递当前节点的基础接口和定时器接口来初始化定时器创建和管理
   auto timer_interface = std::make_shared<tf2_ros::CreateTimerROS>(
@@ -171,66 +179,35 @@ ArmorDetectorNode::ArmorDetectorNode(const rclcpp::NodeOptions &options)
 void ArmorDetectorNode::imageCallback(
     const sensor_msgs::msg::Image::ConstSharedPtr img_msg) 
 {
-  // ── 图像新鲜度检查 ────────────────────────────────────────────────────────
-  // 丢弃所有"过期"帧，确保只处理最新图像。
-  // 根因：armor_detector 推理耗时较长，当相机帧率远高于推理速率时，
-  // 订阅队列中会积压大量帧；若用积压帧的老时间戳发布 armors，
-  // armor_solver 的 tf2_filter 将因 TF cache 已滚动而 drop 消息。
-  // 阈值 150ms ≈ ~6帧@30fps，留有合理余量，同时不让太老的帧进入推理。
-  {
-    double img_age_ms = (this->now() - img_msg->header.stamp).seconds() * 1000.0;
-    if (img_age_ms > 150.0) {
-      RCLCPP_DEBUG(get_logger(),
-        "Dropping stale image: age=%.1f ms > 150 ms, skip.", img_age_ms);
-      return;
-    }
-  }
-
   // Get the transform from odom to gimbal
   // 获取odom到gimbal的转换关系
   try {
-    // 使用 tf2::TimePointZero 查询最新可用的 TF，避免因图像时间戳略超前于
-    // TF 广播时间而导致的 "extrapolation into the future" 错误
+    rclcpp::Time target_time = img_msg->header.stamp;
+
+    // odom_to_gimbal
+    // 获得img到odom的转换关系
+    // 相机到odom
     auto odom_to_gimbal = tf2_buffer_->lookupTransform(
-        odom_frame_, img_msg->header.frame_id, tf2::TimePointZero);
+        odom_frame_, img_msg->header.frame_id, target_time,
+        rclcpp::Duration::from_seconds(0.01));
     
     // 提取转换关系中的旋转关系
     auto msg_q = odom_to_gimbal.transform.rotation;
     tf2::Quaternion tf_q;
-    // 将 ROS 消息类型的四元数转换
+    //  将 ROS 消息类型的四元数
     tf2::fromMsg(msg_q, tf_q);
     // 获得旋转矩阵
     tf2::Matrix3x3 tf2_matrix = tf2::Matrix3x3(tf_q);
 
+    
     imu_to_camera_ << tf2_matrix.getRow(0)[0], tf2_matrix.getRow(0)[1],
         tf2_matrix.getRow(0)[2], tf2_matrix.getRow(1)[0],
         tf2_matrix.getRow(1)[1], tf2_matrix.getRow(1)[2],
         tf2_matrix.getRow(2)[0], tf2_matrix.getRow(2)[1],
         tf2_matrix.getRow(2)[2];
-
-    // TF 首次成功获取，标记为已初始化
-    if (!tf_initialized_) {
-      tf_initialized_ = true;
-      PKA_INFO("armor_detector", "TF '{}' -> '{}' ready, starting pose estimation.",
-               odom_frame_, img_msg->header.frame_id);
-    }
-  } catch (const tf2::TransformException & ex) {
-    // TF 尚未就绪（uart_node 还未广播）：
-    //   - 首次获取成功前：跳过本帧，等待 TF 就绪，用节流日志避免刷屏
-    //   - 首次获取成功后：沿用上一帧的旋转矩阵，继续处理（防止偶发抖动丢帧）
-    if (!tf_initialized_) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000 /*ms*/,
-        "Waiting for TF '%s' -> '%s': %s",
-        odom_frame_.c_str(), img_msg->header.frame_id.c_str(), ex.what());
-      return;
-    }
-    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000 /*ms*/,
-      "lookupTransform temporarily failed, using last known transform: %s", ex.what());
-  } catch (const std::exception & ex) {
-    PKA_ERROR("armor_detector", "lookupTransform exception: {}", ex.what());
-    if (!tf_initialized_) {
-      return;
-    }
+  } catch (...) {
+    PKA_ERROR("armor_detector", "Something Wrong when lookUpTransform");
+    return;
   }
 
   // Detect armors
@@ -238,24 +215,18 @@ void ArmorDetectorNode::imageCallback(
   auto armors = detectArmors(img_msg);
 
   // Init message
-  // armors 消息的 header：
-  //   frame_id 保留图像原始坐标系（armor_solver 需要知道从哪个坐标系做 transform）
-  //   stamp 改用 this->now()（发布时刻），而非图像原始时间戳。
-  //
-  // 关键原因：armor_solver 的 tf2_filter 以 armors.header.stamp 为时刻
-  //   在 TF buffer 里查找对应数据。若用图像原始 stamp（图像采集时刻），
-  //   tf2_filter 要等到 "图像时间之后" 的 TF 广播到来才能插值放行；
-  //   mock 模式 TF 仅 50Hz，每条消息等待最长 20ms，高帧率下积压严重。
-  //   改用 now() 后，armors 发布时 TF buffer 里已经有 now() 附近的数据，
-  //   tf2_filter 几乎可以立即放行，不再积压。
-  armors_msg_.header.frame_id = img_msg->header.frame_id;
-  armors_msg_.header.stamp = this->now();
+  armors_msg_.header = img_msg->header;
   armors_msg_.armors.clear();
 
   // Extract armor poses
   if (armor_pose_estimator_ != nullptr) {
     armors_msg_.armors =
         armor_pose_estimator_->extractArmorPoses(armors, imu_to_camera_);
+
+    // std::string path =
+    //   fmt::format("/home/zcf/fyt2024-log/images/{}/{}.jpg",
+    //   armor_msg.number, now().seconds());
+    // cv::imwrite(path, armor.number_img);
   } else {
     PKA_WARN("armor_detector", "PnP Failed!");
   }
@@ -284,7 +255,7 @@ void ArmorDetectorNode::imageCallback(
   armors_pub_->publish(armors_msg_);
 }
 
-// 初始化Detector
+//初始化Detector
 std::unique_ptr<Detector> ArmorDetectorNode::initDetector() 
 {
   rcl_interfaces::msg::ParameterDescriptor param_desc;
@@ -294,7 +265,7 @@ std::unique_ptr<Detector> ArmorDetectorNode::initDetector()
   param_desc.integer_range[0].to_value = 255;
   int binary_thres = declare_parameter("binary_thres", 160, param_desc);
 
-  // 灯条参数
+  //灯条参数
   Detector::LightParams l_params = {
       .min_ratio = declare_parameter("light.min_ratio", 0.08),
       .max_ratio = declare_parameter("light.max_ratio", 0.4),
@@ -302,7 +273,7 @@ std::unique_ptr<Detector> ArmorDetectorNode::initDetector()
       .color_diff_thresh =
           static_cast<int>(declare_parameter("light.color_diff_thresh", 25))};
 
-  // 装甲板参数
+  //装甲板参数
   Detector::ArmorParams a_params = {
       .min_light_ratio = declare_parameter("armor.min_light_ratio", 0.6),
       .min_small_center_distance =
@@ -375,7 +346,7 @@ std::vector<Armor> ArmorDetectorNode::detectArmors(
   // 发布调试信息
   if (debug_) 
   {
-    // "mono8"：指定图像的编码格式。"mono8" 表示 8 位单通道图像，通常用于灰度图像。
+    //"mono8"：指定图像的编码格式。"mono8" 表示 8 位单通道图像，通常用于灰度图像。
     // CvImage函数用于将cv::Mat转换成ROS图像消息  
     binary_img_pub_.publish(
         cv_bridge::CvImage(img_msg->header, "mono8", detector_->binary_img)
@@ -414,6 +385,7 @@ std::vector<Armor> ArmorDetectorNode::detectArmors(
     cv::circle(img, cam_center_, 5, cv::Scalar(255, 0, 0), 2);
     // Draw latency
     // 绘制延迟
+    // std::stringstream用于字符串的输入和输出
     std::stringstream latency_ss;
     latency_ss << "Latency: " << std::fixed << std::setprecision(2) << latency << "ms";
     auto latency_s = latency_ss.str();
@@ -486,6 +458,18 @@ ArmorDetectorNode::onSetParameters(std::vector<rclcpp::Parameter> parameters)
   return result;
 }
 
+// void ArmorDetectorNode::targetCallback(const
+// rm_interfaces::msg::Target::SharedPtr target_msg) {
+//   if (target_msg->tracking) {
+//     tracked_target_ = target_msg;
+//   } else {
+//     tracked_target_ = nullptr;
+//     if (!tracked_armors_.empty()) {
+//       tracked_armors_.clear();
+//     }
+//   }
+// }
+
 // 创建调试发布者
 void ArmorDetectorNode::createDebugPublishers() noexcept 
 {
@@ -517,6 +501,7 @@ void ArmorDetectorNode::destroyDebugPublishers() noexcept
   result_img_pub_.shutdown();
 }
 
+// 
 void ArmorDetectorNode::publishMarkers() noexcept 
 {
   using Marker = visualization_msgs::msg::Marker;
@@ -535,7 +520,7 @@ void ArmorDetectorNode::setModeCallback(
   VisionMode mode = static_cast<VisionMode>(request->mode);
   // 将自瞄模式名称转换成字符串
   std::string mode_name = visionModeToString(mode);
-  // 如果为"UNKNOWN"
+  //如果为“UNKNOWN”
   if (mode_name == "UNKNOWN") 
   {
     PKA_ERROR("armor_detector", "Invalid mode: {}", request->mode);
@@ -582,4 +567,8 @@ void ArmorDetectorNode::setModeCallback(
 } // namespace pka::auto_aim
 
 #include "rclcpp_components/register_node_macro.hpp"
+
+// Register the component with class_loader.
+// This acts as a sort of entry point, allowing the component to be discoverable
+// when its library is being loaded into a running process.
 RCLCPP_COMPONENTS_REGISTER_NODE(pka::auto_aim::ArmorDetectorNode)

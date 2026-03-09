@@ -30,6 +30,7 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 // third party
 #include <angles/angles.h>
+#include <vector>
 // project
 #include "rm_utils/pkaLoggerCenter.hpp"
 
@@ -111,6 +112,7 @@ void Tracker::update(const Armors::SharedPtr &armors_msg) noexcept
     // Find the closest armor with the same id
     // 寻找相同标签贴纸且最近的装甲板
     Armor same_id_armor;
+    std::vector<Armor> same_id_armors;
     int same_id_armors_count = 0;
     // 获得装甲板x y z方向的位姿
     auto predicted_position = getArmorPositionFromState(ekf_prediction);
@@ -125,8 +127,9 @@ void Tracker::update(const Armors::SharedPtr &armors_msg) noexcept
       {
         same_id_armor = armor;
         same_id_armors_count++;
+        same_id_armors.emplace_back(same_id_armor);
         // 观测一下count是否++
-        std::cout<<"same_id_armors:"<<same_id_armors_count<<std::endl;
+        // std::cout<<"same_id_armors:"<<same_id_armors_count<<std::endl;
         // Calculate the difference between the predicted position and the
         // current armor position
         // 计算预测位置与当前装甲板位置的差异
@@ -166,45 +169,74 @@ void Tracker::update(const Armors::SharedPtr &armors_msg) noexcept
 
     // Check if the distance and yaw difference of closest armor are within the threshold
     // 检查最近装甲板的距离和偏航差是否在阈值范围内
+    // std::cout << "same id armor(s) count: " << same_id_armors_count << std::endl;
     if (min_position_diff < max_match_distance_ && yaw_diff < max_match_yaw_diff_) 
     {
       // Matched armor found
       // 匹配的装甲板被找到
-      matched = true;
-      auto p = tracked_armor.pose.position;
-      // Update EKF
-      // 更新EKF
-      double measured_yaw = orientationToYaw(tracked_armor.pose.orientation);
-      // 四行一列
-      measurement = Eigen::Vector4d(p.x, p.y, p.z, measured_yaw);
-      // 更新后的状态估计
-      target_state = ekf->update(measurement);
-    } 
-    else if (same_id_armors_count == 1 && yaw_diff > max_match_yaw_diff_) 
+      // std::cout << "same id armor counts: " << same_id_armors_count << std::endl;
+      // ---------------------------------------
+      // matched = true;
+      // auto p = tracked_armor.pose.position;
+      // // Update EKF
+      // // 更新EKF
+      // double measured_yaw = orientationToYaw(tracked_armor.pose.orientation);
+      // // 四行一列
+      // measurement = Eigen::Vector4d(p.x, p.y, p.z, measured_yaw);
+      // // 更新后的状态估计
+      // target_state = ekf->update(measurement);
+      // ---------------------------------------
+      // if (same_id_armors_count > 1) {
+      //   auto armor0 = same_id_armors[0];
+      //   auto armor1 = same_id_armors[1];
+      //   auto armor0_yaw = std::abs(orientationToYaw(armor0.pose.orientation));
+      //   auto armor1_yaw = std::abs(orientationToYaw(armor1.pose.orientation));
+      //   auto selected_armor = armor0_yaw < armor1_yaw ? armor0 : armor1;
+      //   matched = true;
+      //   auto p = selected_armor.pose.position;
+      //   double measured_yaw = orientationToYaw(selected_armor.pose.orientation);
+      //   measurement = Eigen::Vector4d(p.x, p.y, p.z, measured_yaw);
+      //   target_state = ekf->update(measurement);
+      // } else {
+        matched = true;
+        auto p = tracked_armor.pose.position;
+        // Update EKF
+        // 更新EKF
+        double measured_yaw = orientationToYaw(tracked_armor.pose.orientation);
+        // 四行一列
+        measurement = Eigen::Vector4d(p.x, p.y, p.z, measured_yaw);
+        // 更新后的状态估计
+        target_state = ekf->update(measurement);
+      // }
+    }
+    else if (same_id_armors_count == 1 && yaw_diff >= max_match_yaw_diff_)
     {
+      std::cout << "yaw_diff: " << yaw_diff << std::endl;
       // Matched armor not found, but there is only one armor with the same id
       // and yaw has jumped, take this case as the target is spinning and armor jumped
       // 未找到匹配的护甲，但只有一个装甲板具有相同的标签贴纸，yaw角已经跳跃，以这种情况为例，目标正在旋转，装甲板跳跃
       handleArmorJump(same_id_armor);
-    } 
-    else 
+    }
+    else
     {
       // 没有找到匹配的装甲板
       // No matched armor found
-      PKA_WARN("armor_solver", "No matched armor found!");
+      std::cout << "No matched armor found, yaw_diff: " << yaw_diff << ", min_position_diff: " << 
+          min_position_diff << std::endl;
+      // PKA_WARN("armor_solver", "No matched armor found!");
     }
   }
 
   // Prevent radius from spreading
   // 防止半径扩散
-  if (target_state(8) < 0.12) 
+  if (target_state(8) < 0.18) 
   {
-    target_state(8) = 0.12;
+    target_state(8) = 0.18;
     ekf->setState(target_state);
   } 
-  else if (target_state(8) > 0.4) 
+  else if (target_state(8) > 0.35) 
   {
-    target_state(8) = 0.4;
+    target_state(8) = 0.35;
     ekf->setState(target_state);
   }
 

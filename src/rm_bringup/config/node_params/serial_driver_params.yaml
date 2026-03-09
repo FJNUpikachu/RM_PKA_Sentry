@@ -18,7 +18,7 @@
     # 0 → 关闭（不开串口，发布虚拟 receive_data 并广播 TF）
     # 1 → 实际串口（订阅 gimbal_cmd + cmd_vel，缓存后定时发送；接收真实数据）
     # 2 → 虚拟串口（发 yaml 指定的虚拟数据；接收真实数据）
-    serial_mode: 0
+    serial_mode: 1
 
     # TF 父坐标系（odom → gimbal_link）
     target_frame: "gimbal_odom"

@@ -72,7 +72,7 @@ cv::Mat mat2 = utils::eigenToCv(eigen_mat);
 
 示例：
 ```cpp
-#include "rm_utils/logger/log.hpp"
+#include "rm_utils/pkaLoggerCenter.hpp"
 
 // 1. 初始化
 // 参数：日志名称、日志文件路径、日志级别

@@ -308,9 +308,9 @@ void UARTNode::broadcastGimbalTF(const rm_interfaces::msg::SerialReceiveData & d
   t1.header.frame_id = "base_link";
   t1.child_frame_id  = target_frame_;
   t1.transform.rotation      = tf2::toMsg(q1);
-  t1.transform.translation.x = 0.0;
+  t1.transform.translation.x = 0.002988;
   t1.transform.translation.y = 0.0;
-  t1.transform.translation.z = 0.0;
+  t1.transform.translation.z = 0.272;
   tf_broadcaster_->sendTransform(t1);
 
   if (debug_) {

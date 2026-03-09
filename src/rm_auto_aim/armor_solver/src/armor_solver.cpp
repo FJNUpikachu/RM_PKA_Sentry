@@ -233,10 +233,10 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
   gimbal_cmd.yaw_diff = (cmd_yaw - rpy_[2]) * 180 / M_PI;
   gimbal_cmd.pitch_diff = (cmd_pitch - rpy_[1]) * 180 / M_PI;
 
-  if (gimbal_cmd.fire_advice) 
-  {
-    PKA_DEBUG("armor_solver", "You Need Fire!");
-  }
+  // if (gimbal_cmd.fire_advice) 
+  // {
+  //   PKA_DEBUG("armor_solver", "You Need Fire!");
+  // }
   return gimbal_cmd;
 }
 
