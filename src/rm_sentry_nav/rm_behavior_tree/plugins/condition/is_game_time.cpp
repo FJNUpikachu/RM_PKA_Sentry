@@ -15,6 +15,7 @@ BT::NodeStatus IsGameTimeCondition::checkGameStart()
   int game_progress;
   auto msg = getInput<rm_interfaces::msg::GameStatus>("message");
   getInput("game_progress", game_progress);
+  std::cout << "missing required input [game_status]" << '\n';
   if (!msg) {
     // std::cout << "missing required input [game_status]" << '\n';
     return BT::NodeStatus::FAILURE;

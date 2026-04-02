@@ -24,10 +24,13 @@ source install/setup.bash
 echo "=== 启动rm_bringup.launch.py ==="
 
 ros2 launch pb2025_nav_bringup rm_sentry_reality_launch.py \
-world:=test_new \
+world:=rmul_2026 \
 slam:=True \
 use_composition:=False \
 mapping:=False \
 use_robot_state_pub:=True \
 use_respawn:=True \
-style:=RMUL3
+style:=RMUL33333
+
+
+# ros2 run nav2_map_server map_saver_cli -f fugong --ros-args 

@@ -18,8 +18,9 @@
 
 #include "armor_solver/armor_tracker.hpp"
 // std
-// DBL_MAX在#include <cfloat>中的宏定义为一个非常的的双精度浮点数
+// DBL_MAX 在 #include <cfloat> 中的宏定义为一个非常大的双精度浮点数
 #include <cfloat>
+#include <algorithm>
 #include <memory>
 #include <string>
 // ros2
@@ -35,33 +36,69 @@
 #include "rm_utils/pkaLoggerCenter.hpp"
 
 namespace pka::auto_aim {
-  // 跟踪器构造函数
+
+// -------------------------------------------------------
+// 内部辅助：根据 tracked_id 更新 tracked_robot_type 和 tracked_armors_num
+//
+// 兵种 → 装甲板数量映射：
+//   前哨站 (OUTPOST) → OUTPOST_3 (3块)
+//   其余正常机器人   → NORMAL_4  (4块)
+//   （BALANCE_2 为旧赛季平衡步兵，新赛季保留枚举但不应匹配到任何 id）
+// -------------------------------------------------------
+void Tracker::updateTrackedType() noexcept {
+  tracked_robot_type = robotTypeFromId(tracked_id);
+
+  switch (tracked_robot_type) {
+    case RobotType::OUTPOST:
+      tracked_armors_num = ArmorsNum::OUTPOST_3;
+      break;
+    default:
+      tracked_armors_num = ArmorsNum::NORMAL_4;
+      break;
+  }
+}
+
+// 跟踪器构造函数
 Tracker::Tracker(double max_match_distance, double max_match_yaw_diff)
 : tracker_state(LOST)
 , tracked_id(std::string(""))
+, tracked_robot_type(RobotType::UNKNOWN)
 , measurement(Eigen::VectorXd::Zero(4))
 , target_state(Eigen::VectorXd::Zero(9))
 , max_match_distance_(max_match_distance)
 , max_match_yaw_diff_(max_match_yaw_diff)
 , detect_count_(0)
 , lost_count_(0)
-, last_yaw_(0) {}
+, vel_clamp_count_(0)
+, last_yaw_(0)
+// 限幅参数默认值，由外部 armor_solver_node 通过参数覆盖
+// [Fix 1] vel_clamp_frames 默认设为 0（即关闭限幅），
+//         避免硬编码的默认值在 yaml 未正确加载时误伤小陀螺的 v_yaw 收敛。
+//         实际生产使用时由 yaml vel_clamp.frames 控制。
+, vel_clamp_frames(0)
+// [Fix 2] vel_clamp_linear_max 改为合理的线速度保护上限（3.0 m/s）
+, vel_clamp_linear_max(3.0)
+// [Fix 3] vel_clamp_yaw_max 改为能覆盖最大陀螺转速的上限（20.0 rad/s）。
+//         原值 4.0 rad/s 低于小陀螺正常工作转速（5~15 rad/s），
+//         导致 EKF 的 v_yaw 分量在初始化后被持续截断，
+//         造成"无角速度、线速度方向随装甲板旋转"的异常现象。
+, vel_clamp_yaw_max(20.0) {}
 
-void Tracker::init(const Armors::SharedPtr &armors_msg) noexcept 
+void Tracker::init(const Armors::SharedPtr &armors_msg) noexcept
 {
-  if (armors_msg->armors.empty()) 
+  if (armors_msg->armors.empty())
   {
     return;
   }
+
   /***************选板逻辑***************/
   // 只需选择最靠近图像中心的装甲板
   // Simply choose the armor that is closest to image center
   double min_distance = DBL_MAX;
   tracked_armor = armors_msg->armors[0];
-  for (const auto &armor : armors_msg->armors) 
+  for (const auto &armor : armors_msg->armors)
   {
-    // 选取离图像中心最近的装甲板
-    if (armor.distance_to_image_center < min_distance) 
+    if (armor.distance_to_image_center < min_distance)
     {
       min_distance = armor.distance_to_image_center;
       tracked_armor = armor;
@@ -69,293 +106,224 @@ void Tracker::init(const Armors::SharedPtr &armors_msg) noexcept
   }
 
   // 初始化EKF
-  // 把选择的装甲板放入EKF初始化
   initEKF(tracked_armor);
   PKA_INFO("armor_solver", "Init EKF!");
 
-  // tracked_id即为装甲板贴纸的标签
+  // 重置速度限幅计数器
+  // 每次 tracker 从 LOST 重新识别时归零，保证新一轮限幅从第 0 帧开始生效
+  // handleArmorJump 不调用 init()，所以装甲板跳跃不会误触发
+  vel_clamp_count_ = 0;
+
+  // tracked_id 即为装甲板贴纸的标签，同时解析兵种类型和装甲板数量
   tracked_id = tracked_armor.number;
-  // tracker_state 为跟踪器状态
+  updateTrackedType();
   tracker_state = DETECTING;
-  
-  // 判断装甲板类型
-  if (tracked_armor.type == "large" && (tracked_id == "3" || tracked_id == "4" || tracked_id == "5")) 
-  {
-    // 装甲板数量：2
-    tracked_armors_num = ArmorsNum::BALANCE_2;
-  }
-  else if (tracked_id == "outpost") 
-  {
-    // 装甲板数量：3
-    tracked_armors_num = ArmorsNum::OUTPOST_3;
-  } 
-  else 
-  {
-    // 装甲板数量：4
-    tracked_armors_num = ArmorsNum::NORMAL_4;
-  }
+
+  PKA_INFO("armor_solver", "Init armor: id={} type={} large_armor={} armors_num={}",
+           tracked_id,
+           static_cast<int>(tracked_robot_type),
+           isLargeArmor(tracked_robot_type),
+           static_cast<int>(tracked_armors_num));
 }
 
 // 更新跟踪器
-void Tracker::update(const Armors::SharedPtr &armors_msg) noexcept 
+void Tracker::update(const Armors::SharedPtr &armors_msg) noexcept
 {
   // KF predict
   Eigen::VectorXd ekf_prediction = ekf->predict();
 
   bool matched = false;
   // Use KF prediction as default target state if no matched armor is found
-  // 在没有匹配的装甲板时，使用KF的预测作为默认的目标状态
+  // 在没有匹配的装甲板时，使用 KF 的预测作为默认的目标状态
   target_state = ekf_prediction;
 
-  if (!armors_msg->armors.empty()) 
+  if (!armors_msg->armors.empty())
   {
     // Find the closest armor with the same id
     // 寻找相同标签贴纸且最近的装甲板
     Armor same_id_armor;
     std::vector<Armor> same_id_armors;
     int same_id_armors_count = 0;
-    // 获得装甲板x y z方向的位姿
-    auto predicted_position = getArmorPositionFromState(ekf_prediction);
+    auto predicted_position  = getArmorPositionFromState(ekf_prediction);
     double min_position_diff = DBL_MAX;
-    double yaw_diff = DBL_MAX;
-    // 遍历装甲板信息
-    for (const auto &armor : armors_msg->armors) 
+    double yaw_diff          = DBL_MAX;
+
+    for (const auto &armor : armors_msg->armors)
     {
-      // Only consider armors with the same id
-      // 只考虑具有相同标签贴纸的装甲板
-      if (armor.number == tracked_id) 
+      if (armor.number == tracked_id)
       {
         same_id_armor = armor;
         same_id_armors_count++;
         same_id_armors.emplace_back(same_id_armor);
-        // 观测一下count是否++
-        // std::cout<<"same_id_armors:"<<same_id_armors_count<<std::endl;
-        // Calculate the difference between the predicted position and the
-        // current armor position
-        // 计算预测位置与当前装甲板位置的差异
+
         auto p = armor.pose.position;
-        // 三维列向量
-        // position_vec[0] = p.x
-        // position_vec[1] = p.y
-        // position_vec[2] = p.z
         Eigen::Vector3d position_vec(p.x, p.y, p.z);
-        // 计算两次位置的distance即为position_diff
         double position_diff = (predicted_position - position_vec).norm();
-        if (position_diff < min_position_diff) 
+        if (position_diff < min_position_diff)
         {
-          // Find the closest armor
-          // 寻找距离最近的装甲板
           min_position_diff = position_diff;
-          // 计算两次位置的yaw角差值，并取绝对值
           yaw_diff = abs(orientationToYaw(armor.pose.orientation) - ekf_prediction(6));
           tracked_armor = armor;
-          // Update tracked armor type
-          // 更新跟踪的装甲板类型
-          if (tracked_armor.type == "large" && (tracked_id == "3" || tracked_id == "4" || tracked_id == "5")) 
-          {
-            tracked_armors_num = ArmorsNum::BALANCE_2;
-          } 
-          else if (tracked_id == "outpost") 
-          {
-            tracked_armors_num = ArmorsNum::OUTPOST_3;
-          } 
-          else 
-          {
-            tracked_armors_num = ArmorsNum::NORMAL_4;
-          }
+          // id 不变时兵种类型不会改变，无需重新调用 updateTrackedType()
         }
       }
     }
 
     // Check if the distance and yaw difference of closest armor are within the threshold
-    // 检查最近装甲板的距离和偏航差是否在阈值范围内
-    // std::cout << "same id armor(s) count: " << same_id_armors_count << std::endl;
-    if (min_position_diff < max_match_distance_ && yaw_diff < max_match_yaw_diff_) 
+    if (min_position_diff < max_match_distance_ && yaw_diff < max_match_yaw_diff_)
     {
       // Matched armor found
-      // 匹配的装甲板被找到
-      // std::cout << "same id armor counts: " << same_id_armors_count << std::endl;
-      // ---------------------------------------
-      // matched = true;
-      // auto p = tracked_armor.pose.position;
-      // // Update EKF
-      // // 更新EKF
-      // double measured_yaw = orientationToYaw(tracked_armor.pose.orientation);
-      // // 四行一列
-      // measurement = Eigen::Vector4d(p.x, p.y, p.z, measured_yaw);
-      // // 更新后的状态估计
-      // target_state = ekf->update(measurement);
-      // ---------------------------------------
-      // if (same_id_armors_count > 1) {
-      //   auto armor0 = same_id_armors[0];
-      //   auto armor1 = same_id_armors[1];
-      //   auto armor0_yaw = std::abs(orientationToYaw(armor0.pose.orientation));
-      //   auto armor1_yaw = std::abs(orientationToYaw(armor1.pose.orientation));
-      //   auto selected_armor = armor0_yaw < armor1_yaw ? armor0 : armor1;
-      //   matched = true;
-      //   auto p = selected_armor.pose.position;
-      //   double measured_yaw = orientationToYaw(selected_armor.pose.orientation);
-      //   measurement = Eigen::Vector4d(p.x, p.y, p.z, measured_yaw);
-      //   target_state = ekf->update(measurement);
-      // } else {
-        matched = true;
-        auto p = tracked_armor.pose.position;
-        // Update EKF
-        // 更新EKF
-        double measured_yaw = orientationToYaw(tracked_armor.pose.orientation);
-        // 四行一列
-        measurement = Eigen::Vector4d(p.x, p.y, p.z, measured_yaw);
-        // 更新后的状态估计
-        target_state = ekf->update(measurement);
-      // }
+      matched = true;
+      auto p  = tracked_armor.pose.position;
+      double measured_yaw = orientationToYaw(tracked_armor.pose.orientation);
+      measurement  = Eigen::Vector4d(p.x, p.y, p.z, measured_yaw);
+      target_state = ekf->update(measurement);
+
+      // ── 速度限幅（Velocity Clamp）──────────────────────────────────────────
+      // EKF 初始化后协方差处于初始状态，前几帧 update() 时若观测位置与
+      // 初始位置存在偏差（坐标系切换抖动/tf2 时间戳误差等），EKF 会产生
+      // 极大的速度修正量，导致云台抽风。
+      //
+      // 策略：在 vel_clamp_frames 帧内，对 update() 输出的速度分量
+      //   (v_x:1, v_y:3, v_z:5, v_yaw:7) 做硬限幅，超出阈值则截断。
+      //   限幅后将截断后的状态写回 EKF，使后续 predict() 基于合理速度传播。
+      //
+      // 关键：限幅只在 matched 分支内、update() 之后执行，
+      //   predict() 的自由传播完全不受影响，EKF 协方差可以正常扩张；
+      //   vel_clamp_yaw_max 必须高于最大陀螺转速，
+      //   只截断初始化瞬间的异常冲量，不会压死角速度收敛。
+      // ───────────────────────────────────────────────────────────────────────
+      if (vel_clamp_count_ < vel_clamp_frames)
+      {
+        clampVelocity(target_state);
+        ekf->setState(target_state);
+        vel_clamp_count_++;
+        PKA_DEBUG("armor_solver",
+                  "Vel clamp active [{}/{}]: vx={:.3f} vy={:.3f} vz={:.3f} vyaw={:.3f}",
+                  vel_clamp_count_, vel_clamp_frames,
+                  target_state(1), target_state(3), target_state(5), target_state(7));
+      }
     }
     else if (same_id_armors_count == 1 && yaw_diff >= max_match_yaw_diff_)
     {
       std::cout << "yaw_diff: " << yaw_diff << std::endl;
-      // Matched armor not found, but there is only one armor with the same id
-      // and yaw has jumped, take this case as the target is spinning and armor jumped
-      // 未找到匹配的护甲，但只有一个装甲板具有相同的标签贴纸，yaw角已经跳跃，以这种情况为例，目标正在旋转，装甲板跳跃
+      // Matched armor not found, but yaw has jumped — target is spinning
       handleArmorJump(same_id_armor);
     }
     else
     {
-      // 没有找到匹配的装甲板
-      // No matched armor found
-      std::cout << "No matched armor found, yaw_diff: " << yaw_diff << ", min_position_diff: " << 
-          min_position_diff << std::endl;
-      // PKA_WARN("armor_solver", "No matched armor found!");
+      std::cout << "No matched armor found, yaw_diff: " << yaw_diff
+                << ", min_position_diff: " << min_position_diff << std::endl;
     }
   }
 
   // Prevent radius from spreading
   // 防止半径扩散
-  if (target_state(8) < 0.18) 
+  if (target_state(8) < 0.18)
   {
     target_state(8) = 0.18;
     ekf->setState(target_state);
-  } 
-  else if (target_state(8) > 0.35) 
+  }
+  else if (target_state(8) > 0.35)
   {
     target_state(8) = 0.35;
     ekf->setState(target_state);
   }
 
   // Tracking state machine
-  // 跟踪器的状态
-  if (tracker_state == DETECTING) 
+  if (tracker_state == DETECTING)
   {
-    if (matched) 
+    if (matched)
     {
       detect_count_++;
-      if (detect_count_ > tracking_thres) 
+      if (detect_count_ > tracking_thres)
       {
         detect_count_ = 0;
         tracker_state = TRACKING;
         PKA_DEBUG("armor_solver", "Tracker state: TRACKING {}", tracked_id);
       }
-    } 
-    else 
+    }
+    else
     {
       detect_count_ = 0;
       tracker_state = LOST;
       PKA_DEBUG("armor_solver", "Tracker state: LOST {}", tracked_id);
     }
-  } 
-  else if (tracker_state == TRACKING) 
+  }
+  else if (tracker_state == TRACKING)
   {
-    if (!matched) 
+    if (!matched)
     {
       tracker_state = TEMP_LOST;
       lost_count_++;
       PKA_DEBUG("armor_solver", "Tracker state: TEMP_LOST {}", tracked_id);
     }
-  } 
-  else if (tracker_state == TEMP_LOST) 
+  }
+  else if (tracker_state == TEMP_LOST)
   {
-    if (!matched) 
+    if (!matched)
     {
       lost_count_++;
-      if (lost_count_ > lost_thres) 
+      if (lost_count_ > lost_thres)
       {
         lost_count_ = 0;
         tracker_state = LOST;
         PKA_DEBUG("armor_solver", "Tracker state: LOST {}", tracked_id);
       }
-    } 
-    else 
+    }
+    else
     {
       tracker_state = TRACKING;
-      lost_count_ = 0;
+      lost_count_   = 0;
       PKA_DEBUG("armor_solver", "Tracker state: TRACKING {}", tracked_id);
     }
   }
 }
 
-void Tracker::initEKF(const Armor &a) noexcept 
+void Tracker::initEKF(const Armor &a) noexcept
 {
-  //xa : x_armor
-  // 装甲板的x、y、z分量值
+  // xa : x_armor
   double xa = a.pose.position.x;
   double ya = a.pose.position.y;
   double za = a.pose.position.z;
-  last_yaw_ = 0; 
-  // 计算装甲板的yaw角（将四元数转换成yaw角）
+  last_yaw_ = 0;
   double yaw = orientationToYaw(a.pose.orientation);
 
-  // Set initial position at 0.2m behind the target
-  // 初始位置设置在目标后方0.2m处
-
-  // 初始化元素为0的列向量长度为X_N,存储目标状态
   target_state = Eigen::VectorXd::Zero(X_N);
-  
-  //机器人半径
-  double r = 0.26;
+
+  // 机器人半径
+  double r  = 0.26;
   double xc = xa + r * cos(yaw);
   double yc = ya + r * sin(yaw);
-  // 机器人中心的z即为装甲板的z
   double zc = za;
 
-  // 初始化d_za和d_zc为0，并且初始化另一对装甲板组成的半径another_r也为r
   d_za = 0, d_zc = 0, another_r = r;
-  /*
-  target_state向量
-  target_state[0]=xc
-  target_state[1]=0(v_x)
-  target_state[2]=yc
-  target_state[3]=0(v_y)
-  target_state[4]=zc
-  target_state[5]=0(v_z)
-  target_state[6]=yaw
-  target_state[7]=0(v_yaw)
-  target_state[8]=r
-  target_state[9]=d_zc
-  */
 
+  /*
+  target_state 向量
+  [0]=xc  [1]=v_x
+  [2]=yc  [3]=v_y
+  [4]=zc  [5]=v_z
+  [6]=yaw [7]=v_yaw
+  [8]=r   [9]=d_zc
+  */
   target_state << xc, 0, yc, 0, zc, 0, yaw, 0, r, d_zc;
 
-  // 设置初始状态
   ekf->setState(target_state);
 }
 
 // 处理装甲板跳跃的情况
-void Tracker::handleArmorJump(const Armor &current_armor) noexcept 
+void Tracker::handleArmorJump(const Armor &current_armor) noexcept
 {
   double last_yaw = target_state(6);
-  // 计算最近一块装甲板的yaw角
-  double yaw = orientationToYaw(current_armor.pose.orientation);
+  double yaw      = orientationToYaw(current_armor.pose.orientation);
 
-  // 如果两次yaw角差值大于0.4弧度
-  if (abs(yaw - last_yaw) > 0.4) 
+  if (abs(yaw - last_yaw) > 0.4)
   {
-    // Armor angle also jumped, take this case as target spinning
-    // 装甲板角度发生跳变，此时目标在旋转
     target_state(6) = yaw;
-    // Only 4 armors has 2 radius and height
-    // 只有4块装甲板具有两个半径和高度
-    if (tracked_armors_num == ArmorsNum::NORMAL_4) 
+    if (tracked_armors_num == ArmorsNum::NORMAL_4)
     {
       d_za = target_state(4) + target_state(9) - current_armor.pose.position.z;
-      // 进行半径交换
       std::swap(target_state(8), another_r);
       d_zc = d_zc == 0 ? -d_za : 0;
       target_state(9) = d_zc;
@@ -365,17 +333,12 @@ void Tracker::handleArmorJump(const Armor &current_armor) noexcept
 
   auto p = current_armor.pose.position;
   Eigen::Vector3d current_p(p.x, p.y, p.z);
-  // 获得目标装甲板的xa、ya、za
   Eigen::Vector3d infer_p = getArmorPositionFromState(target_state);
 
-  if ((current_p - infer_p).norm() > max_match_distance_) 
+  if ((current_p - infer_p).norm() > max_match_distance_)
   {
-    // If the distance between the current armor and the inferred armor is too
-    // large, the state is wrong, reset center position and velocity in the
-    // state
-    // 如果当前的装甲板与推断出来的装甲板的距离过大，则state错误，重置state的中心位置和速度
     d_zc = 0;
-    double r = target_state(8);
+    double r        = target_state(8);
     target_state(0) = p.x + r * cos(yaw);  // xc
     target_state(1) = 0;                   // vxc
     target_state(2) = p.y + r * sin(yaw);  // yc
@@ -389,34 +352,40 @@ void Tracker::handleArmorJump(const Armor &current_armor) noexcept
   ekf->setState(target_state);
 }
 
-// 用于将四元数转换为yaw角
-double Tracker::orientationToYaw(const geometry_msgs::msg::Quaternion &q) noexcept 
+void Tracker::clampVelocity(Eigen::VectorXd &state) const noexcept
 {
-  // Get armor yaw
-  // 获得装甲板的yaw
+  // target_state 各速度分量索引：
+  //   state(1) = v_x,  state(3) = v_y,
+  //   state(5) = v_z,  state(7) = v_yaw
+  const double lin_max = vel_clamp_linear_max;
+  const double yaw_max = vel_clamp_yaw_max;
+
+  state(1) = std::clamp(state(1), -lin_max, lin_max);  // v_x
+  state(3) = std::clamp(state(3), -lin_max, lin_max);  // v_y
+  state(5) = std::clamp(state(5), -lin_max, lin_max);  // v_z
+  state(7) = std::clamp(state(7), -yaw_max, yaw_max);  // v_yaw
+}
+
+// 用于将四元数转换为 yaw 角
+double Tracker::orientationToYaw(const geometry_msgs::msg::Quaternion &q) noexcept
+{
   tf2::Quaternion tf_q;
-  // 将q转化为tf_q
   tf2::fromMsg(q, tf_q);
   double roll, pitch, yaw;
   tf2::Matrix3x3(tf_q).getRPY(roll, pitch, yaw);
   // Make yaw change continuous (-pi~pi to -inf~inf)
-  // 使偏航变化连续（-pi~pi 更改为 -inf~inf）
-
-  // 计算last_yaw_ 到yaw的最短旋转角度
-  yaw = last_yaw_ + angles::shortest_angular_distance(last_yaw_, yaw);
+  yaw       = last_yaw_ + angles::shortest_angular_distance(last_yaw_, yaw);
   last_yaw_ = yaw;
   return yaw;
 }
 
-// 返回一个三维列向量即3x1的矩阵，包括装甲板x y z的姿态
-Eigen::Vector3d Tracker::getArmorPositionFromState(const Eigen::VectorXd &x) noexcept 
+// 返回一个三维列向量，包括装甲板 x y z 的姿态
+Eigen::Vector3d Tracker::getArmorPositionFromState(const Eigen::VectorXd &x) noexcept
 {
-  // Calculate predicted position of the current armor
-  // 计算当前装甲板的预测位置
-  double xc = x(0), yc = x(2), za = x(4) + x(9);
-  double yaw = x(6), r = x(8);
-  double xa = xc - r * cos(yaw);
-  double ya = yc - r * sin(yaw);
+  double xc  = x(0), yc = x(2), za = x(4) + x(9);
+  double yaw = x(6), r  = x(8);
+  double xa  = xc - r * cos(yaw);
+  double ya  = yc - r * sin(yaw);
   return Eigen::Vector3d(xa, ya, za);
 }
 

@@ -144,7 +144,7 @@ def generate_launch_description():
 
     declare_rviz_config_file_cmd = DeclareLaunchArgument(
         "rviz_config_file",
-        default_value=os.path.join(bringup_dir, "rviz", "pikachu.rviz"),
+        default_value=os.path.join(bringup_dir, "rviz", "20260310.rviz"),
         description="Full path to the RVIZ config file to use",
     )
 
@@ -296,6 +296,6 @@ def generate_launch_description():
     ld.add_action(joy_teleop_cmd)
     ld.add_action(rviz_cmd)
     # ld.add_action(start_rm_serial_node)
-    # ld.add_action(behaviortree_cmd)
+    ld.add_action(behaviortree_cmd)
 
     return ld

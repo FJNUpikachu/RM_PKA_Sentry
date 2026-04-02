@@ -24,7 +24,6 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "small_gicp/ann/kdtree_omp.hpp"
-#include <pclomp/ndt_omp.h>
 #include "small_gicp/factors/gicp_factor.hpp"
 #include "small_gicp/pcl/pcl_point.hpp"
 #include "small_gicp/registration/reduction_omp.hpp"
@@ -32,7 +31,6 @@
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_broadcaster.h"
 #include "tf2_ros/transform_listener.h"
-#include <small_gicp/pcl/pcl_point_traits.hpp> 
 
 namespace small_gicp_relocalization
 {
@@ -57,14 +55,6 @@ private:
   float global_leaf_size_;
   float registered_leaf_size_;
   float max_dist_sq_;
-  // 【新增】NDT 参数
-  bool use_ndt_;
-  double ndt_resolution_;
-  double error_threshold_;
-  int ndt_num_threads_;
-  bool debug_;
-  bool is_lost_;
-  int skip_step_;
   std::vector<double> init_pose_;
 
   std::string map_frame_;
@@ -79,9 +69,6 @@ private:
   Eigen::Isometry3d result_t_;
   Eigen::Isometry3d previous_result_t_;
 
-  // 【新增】pclomp NDT 对象
-  // 使用 shared_ptr 以便在构造函数中初始化
-  std::shared_ptr<pclomp::NormalDistributionsTransform<pcl::PointXYZ, pcl::PointXYZ>> ndt_omp_;
   pcl::PointCloud<pcl::PointXYZ>::Ptr global_map_;
   pcl::PointCloud<pcl::PointXYZ>::Ptr registered_scan_;
   pcl::PointCloud<pcl::PointXYZ>::Ptr accumulated_cloud_;

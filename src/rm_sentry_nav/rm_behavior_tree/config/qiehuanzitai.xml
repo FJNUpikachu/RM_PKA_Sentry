@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4" main_tree_to_execute="ThreeWaypointsTree">
+  <BehaviorTree ID="ThreeWaypointsTree">
+    <Sequence>
+      <SendGoal name="Point_1" goal_pose="5.17;-0.7;0; 0;0;0;1" action_name="navigate_to_pose"/>
+      <Sleep msec="10000"/>
+
+      <SendGoal name="Point_2" goal_pose="6.03;-2.41;0; 0;0;0;1" action_name="navigate_to_pose"/>
+      <Sleep msec="10000"/>
+
+      <SendGoal name="Point_3" goal_pose="4.60;-4.36;0; 0;0;0;1" action_name="navigate_to_pose"/>
+      <Sleep msec="10000"/>
+    </Sequence>
+  </BehaviorTree>
+
+  <TreeNodesModel>
+    <Action ID="SendGoal" editable="true">
+      <input_port name="goal_pose" default="0;0;0; 0;0;0;1"/>
+      <input_port name="action_name" default="navigate_to_pose"/>
+    </Action>
+  </TreeNodesModel>
+</root>

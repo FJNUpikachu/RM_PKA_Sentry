@@ -105,33 +105,52 @@ sensor_scan_generation:
 
 terrain_analysis:
   ros__parameters:
-    sensor_frame: "livox_frame"
-    scan_voxel_size: 0.05               # 点云下采样
-    decay_time: 0.5                     # 点云时间差阈值 大于则不会被处理
-    no_decay_dis: 0.0                   # 点云距离阈值 小于该阈值不考虑时间差
-    clearing_dis: 0.0                   # 该距离外的点会被清除
-    use_sorting: True                   # 这个参数开起来就能上坡了；如果 use_sorting,那么就以周围点中的分位点作为地面点，否则以最低点作为地面点；周围其余点相对于地面点的高度作为通过代价，所以对于坡面，有的点的代价是正，有的是负，就相互抵消了；不要与 consider_drop 同时开启，计算上会有冲突
-    quantile_z: 0.2                     # useful if use_sorting is enabled.
-    consider_drop: False                # 考虑凹下去的地面,开启则将相对于地面点的高度取绝对值
-    limit_ground_lift: False            # useful if use_sorting is enabled
-    max_ground_lift: 0.3                # useful if use_sorting is enabled
-    clear_dy_obs: True                  # 清除动态物体的话，有动态物体走过的地方就走不了了
-    min_dy_obs_dis: 0.3                 # 以下参数都是在 clear_dy_obs 的情况下才有用的
-    min_dy_obs_angle: 0.0
-    min_dy_obs_rel_z: -0.3
-    abs_dy_obs_rel_z_thre: 0.2
-    min_dy_obs_vfov: -28.0
-    max_dy_obs_vfov: 33.0
-    min_dy_obs_point_num: 1
-    no_data_obstacle: False             # treat no data as obstacle
-    no_data_block_skip_num: 0
-    min_block_point_num: 10
-    vehicle_height: 0.7                 # 小于车辆高度的点才会进行处理，配置实车
-    voxel_point_update_thre: 100
-    voxel_time_update_thre: 1.0
-    min_rel_z: -1.5                     # min_rel_z 以及 max_rel_z 限制了有效点云点的Z值范围，用于对天花板和地板进行处理
-    max_rel_z: 0.5
-    dis_ratio_z: 0.2                    # Z 值的最大最小范围由这两个值决定，但是并不等于这两个值，是有一个比例关系的，距离机器人越远，限定范围就越大，这其中考虑了坡度
+    scanVoxelSize: 0.05                 # 点云下采样
+    decayTime: 2.0                      # 局部衰退时间 需要改成大yaw转一圈+0.1~0.5 点云时间差阈值 大于则不会被处理 0.5
+    noDecayDis: 0.0                     # 点云距离阈值 小于该阈值不考虑时间差
+    clearingDis: 0.0                    # 该距离外的点会被清除
+    useSorting: True                    # 这个参数开起来就能上坡了；如果 use_sorting,那么就以周围点中的分位点作为地面点，否则以最低点作为地面点；周围其余点相对于地面点的高度作为通过代价，所以对于坡面，有的点的代价是正，有的是负，就相互抵消了；不要与 consider_drop 同时开启，计算上会有冲突
+    quantileZ: 0.2                      # useful if use_sorting is enabled.
+    considerDrop: False                 # 考虑凹下去的地面,开启则将相对于地面点的高度取绝对值
+    limitGroundLift: False
+    maxGroundLift: 0.3
+    clearDyObs: False                    # 清除动态物体的话，有动态物体走过的地方就走不了了
+    minDyObsDis: 0.3                    # 以下参数都是在 clear_dy_obs 的情况下才有用的
+    minDyObsAngle: 0.0
+    minDyObsRelZ: -0.3
+    absDyObsRelZThre: 0.2
+    minDyObsVFOV: -28.0
+    maxDyObsVFOV: 33.0
+    minDyObsPointNum: 1
+    noDataObstacle: False               # treat no data as obstacle
+    noDataBlockSkipNum: 0
+    minBlockPointNum: 2    #10
+    vehicleHeight: 0.6                  # 小于车辆高度的点才会进行处理
+    voxelPointUpdateThre: 20     #100
+    voxelTimeUpdateThre: 3.0   #1.0
+    minRelZ: -1.5                       # min_rel_z 以及 max_rel_z 限制了有效点云点的Z值范围，用于对天花板和地板进行处理
+    maxRelZ: 0.0
+    disRatioZ: 0.2                      # Z 值的最大最小范围由这两个值决定，但是并不等于这两个值，是有一个比例关系的，距离机器人越远，限定范围就越大，这其中考虑了坡度
+
+terrain_analysis_ext:
+  ros__parameters:
+    scanVoxelSize: 0.1
+    decayTime: 0.05   #0.2 全局衰退时间
+    noDecayDis: 0.0
+    clearingDis: 20.0
+    useSorting: true
+    quantileZ: 0.2
+    vehicleHeight: 1.0
+    voxelPointUpdateThre: 100
+    voxelTimeUpdateThre: 2.0
+    lowerBoundZ: -1.5
+    upperBoundZ: 0.5
+    disRatioZ: 0.2
+    checkTerrainConn: False
+    terrainUnderVehicle: -0.75
+    terrainConnThre: 0.5
+    ceilingFilteringThre: 2.0
+    localTerrainMapRadius: 4.0
 
 fake_vel_transform:
   ros__parameters:
@@ -142,7 +161,7 @@ fake_vel_transform:
     input_cmd_vel_topic: "cmd_vel_nav2_result"
     output_cmd_vel_topic: "cmd_vel"
     # cmd_spin_topic: "cmd_spin"
-    spin_speed: 0.0
+    spin_speed: 0.00
 
 small_gicp_relocalization:
   ros__parameters:
@@ -286,8 +305,8 @@ bt_navigator:
     bt_loop_duration: 10
     default_server_timeout: 100
     wait_for_service_timeout: 1000
-    default_nav_to_pose_bt_xml: /home/whiteink/pka_sentry_2026/src/pb2025_sentry_nav/pb2025_nav_bringup/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml # or $(find-pkg-share my_package)/behavior_tree/my_nav_to_pose_bt.xml
-    default_nav_through_poses_bt_xml: /home/whiteink/pka_sentry_2026/src/pb2025_sentry_nav/pb2025_nav_bringup/behavior_trees/navigate_through_poses_w_replanning_and_recovery.xml # or $(find-pkg-share my_package)/behavior_tree/my_nav_through_poses_bt.xml
+    default_nav_to_pose_bt_xml: /home/whiteink/RM_PKA_Vision_2025_Two/src/rm_sentry_nav/pb2025_nav_bringup/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml # or $(find-pkg-share my_package)/behavior_tree/my_nav_to_pose_bt.xml
+    default_nav_through_poses_bt_xml: /home/whiteink/RM_PKA_Vision_2025_Two/src/rm_sentry_nav/pb2025_nav_bringup/behavior_trees/navigate_through_poses_w_replanning_and_recovery.xml # or $(find-pkg-share my_package)/behavior_tree/my_nav_through_poses_bt.xml
     plugin_lib_names:
       - nav2_compute_path_to_pose_action_bt_node
       - nav2_compute_path_through_poses_action_bt_node
@@ -337,11 +356,178 @@ bt_navigator:
       - nav2_drive_on_heading_cancel_bt_node
       - nav2_is_battery_charging_condition_bt_node
 
+# bt_navigator:
+#   ros__parameters:
+#     use_sim_time: False
+#     global_frame: map
+#     robot_base_frame: base_link_fake
+#     odom_topic: odometry
+#     bt_loop_duration: 10
+#     default_server_timeout: 20
+#     plugin_lib_names:
+#     - nav2_compute_path_to_pose_action_bt_node
+#     - nav2_compute_path_through_poses_action_bt_node
+#     - nav2_follow_path_action_bt_node
+#     - nav2_back_up_action_bt_node
+#     - nav2_spin_action_bt_node
+#     - nav2_wait_action_bt_node
+#     - nav2_clear_costmap_service_bt_node
+#     - nav2_is_stuck_condition_bt_node
+#     - nav2_goal_reached_condition_bt_node
+#     - nav2_goal_updated_condition_bt_node
+#     - nav2_initial_pose_received_condition_bt_node
+#     - nav2_reinitialize_global_localization_service_bt_node
+#     - nav2_rate_controller_bt_node
+#     - nav2_distance_controller_bt_node
+#     - nav2_speed_controller_bt_node
+#     - nav2_truncate_path_action_bt_node
+#     - nav2_goal_updater_node_bt_node
+#     - nav2_recovery_node_bt_node
+#     - nav2_pipeline_sequence_bt_node
+#     - nav2_round_robin_node_bt_node
+#     - nav2_transform_available_condition_bt_node
+#     - nav2_time_expired_condition_bt_node
+#     - nav2_distance_traveled_condition_bt_node
+#     - nav2_single_trigger_bt_node
+#     - nav2_is_battery_low_condition_bt_node
+#     - nav2_navigate_through_poses_action_bt_node
+#     - nav2_navigate_to_pose_action_bt_node
+#     - nav2_remove_passed_goals_action_bt_node
+#     - nav2_planner_selector_bt_node
+#     - nav2_controller_selector_bt_node
+#     - nav2_goal_checker_selector_bt_node
+
+# controller_server:
+#   ros__parameters:
+#     use_sim_time: false
+#     controller_frequency: 80.0
+#     min_x_velocity_threshold: 0.05
+#     min_y_velocity_threshold: 0.05
+#     min_theta_velocity_threshold: 0.1
+#     failure_tolerance: 1.0 # 调用控制器插件允许失败的最大持续时间（秒）
+#     odom_topic: "odometry"
+#     progress_checker_plugin: "progress_checker"
+#     goal_checker_plugins: ["general_goal_checker"]
+#     controller_plugins: ["FollowPath"]
+
+#     # 进度检查器参数
+#     progress_checker:
+#       plugin: "nav2_controller::SimpleProgressChecker"
+#       required_movement_radius: 0.5
+#       movement_time_allowance: 3.0
+
+#     # 目标检查器参数
+#     general_goal_checker:
+#       stateful: False
+#       plugin: "nav2_controller::SimpleGoalChecker"
+#       xy_goal_tolerance: 0.3
+#       yaw_goal_tolerance: 3.14
+
+#     FollowPath:
+#       plugin: "nav2_mppi_controller::MPPIController"
+      
+#       # param
+#       adjustThre: 14.0 # 坡度大于此值将触发调整朝向行为
+#       minAngleDiff: 365.0 # 如果角度差大于此值，机器人将继续调整朝向
+#       adjustHeadingSpeed: 0.2 # 调整朝向的角速度
+      
+#       # MPPI Parameters
+#       time_steps: 60 # 预测范围 = time_steps x model_dt = 3秒
+#       model_dt: 0.0125 # = 1 / controller_frequency
+#       batch_size: 2000 # 在给定迭代中从当前最优控制序列随机采样的候选轨迹数量。50Hz时1000或30Hz时2000似乎能产生不错的结果。
+#       vx_std: 0.78
+#       vy_std: 0.78
+#       wz_std: 0.1
+#       vx_max: 2.8 # 预测范围 x vx_max = 3.0米 --> 局部代价地图尺寸应大于 3.0 x 2 = 6米  1.4
+#       vx_min: -2.8 # 最大倒车速度 (m/s)。
+#       vy_max: 1.4
+#       wz_max: 0.1
+#       iteration_count: 1 # 建议保持为1，转而选择更大的 batch_size。
+#       prune_distance: 4.0 # 与最大速度和预测范围的比例。
+#       transform_tolerance: 0.1 # TF数据转换的时间容差（秒）。
+#       temperature: 0.3 # 0 表示使用成本最优的控制，巨大的值将导致仅取所有轨迹的平均值而不考虑成本。
+#       gamma: 0.07 # 平滑度（高）和低能耗（低）之间的权衡。这是一个复杂的参数，通常不需要更改默认值。
+#       motion_model: "Omni"
+#       visualize: false # 设置为 true 以可视化轨迹，但这会大大降低计算速度
+#       reset_period: 1.0 # 重置优化器所需的非活动时间（仅在 Humble 版本中）
+#       regenerate_noises: false
+#       retry_attempt_limit: 3 # 在报告完全失败之前，软重置失败时尝试寻找可行轨迹的次数。
+
+#       TrajectoryVisualizer:
+#         trajectory_step: 5
+#         time_step: 3
+
+#       # AckermannConstraints:
+#       #   min_turning_r: 0.2
+
+#       critics: ["ObstaclesCritic", "GoalCritic", "PathAlignCritic", "PathFollowCritic", "TwirlingCritic"]
+
+#       GoalCritic:
+#         enabled: true
+#         cost_power: 1
+#         cost_weight: 5.0
+#         threshold_to_consider: 0.7 # 机器人与目标之间的最小距离（米），超过该距离才考虑目标距离成本。明智的做法是将此值设置为与预测范围相同，以便与路径跟随评价器进行清晰的切换。
+
+#       # 即当此评价器添加到代价函数时
+#       PreferForwardCritic: # 向前移动，而不是倒车。
+#         enabled: false
+#         cost_power: 1
+#         cost_weight: 5.0
+#         threshold_to_consider: 0.7 # 机器人与目标之间的距离（米），在此距离停止考虑优先前行并允许目标评价器接管。
+
+#       ObstaclesCritic: # 如果容易撞到低矮的障碍物，检查地形分析是否正确然后再调整这个参数
+#         enabled: true
+#         cost_power: 1
+#         repulsion_weight: 0.2 #! 由于惩罚的形成方式（例如 inflation_radius - min_dist_to_obstacle），较高的半径应对应较低的 repulsion_weight。
+
+#         # 这与临界项分开，以便在不影响可能直接导致近距离碰撞的动作的情况下，针对动态场景通过路径对齐微调障碍物行为。这适用于障碍物的 inflation_radius 距离内。
+#         critical_weight: 20.0
+#         consider_footprint: false # 开启此项会增加计算成本
+#         collision_cost: 40.0
+#         collision_margin_distance: 0.05 # 施加严重惩罚的碰撞边缘距离（米），类似于足迹膨胀。0.05-0.2 之间是合理的。注意，这将极大地影响控制器不进入比此更狭窄的空间，因此请确保此参数设置得低于您期望机器人通过的最窄处。
+#         near_goal_distance: 0.1 # 如果机器人处于目标的此距离内，它将不会被障碍物排斥。
+#         inflation_radius: 0.4 # 致命障碍物周围膨胀代价地图的半径。这应该与您的膨胀层相同（仅限 Humble）
+#         cost_scaling_factor: 10.0 # 跨越膨胀半径的指数衰减因子。这应该与您的膨胀层相同（仅限 Humble）
+#         inflation_layer_name: ["inflation_layer"]
+
+#       PathAlignCritic:
+#         enabled: true
+#         cost_power: 1
+#         cost_weight: 20.0
+#         max_path_occupancy_ratio: 0.001
+#         trajectory_point_step: 3 #?
+#         threshold_to_consider: 0.7 # 0.5 # 机器人与目标之间的距离（米），在此距离停止考虑路径对齐并允许目标评价器接管。所以只需保持与 GoalCritic 中的 threshold_to_consider 相同即可。
+#         offset_from_furthest: 2 # 选择此值为最大速度投影距离的约 30% 为佳
+#         # （例如，如果规划器每 2.5cm 生成一个点，则 1.5m 的局部代价地图半径上可以容纳 60 个点。如果最大速度为 0.5m/s，预测时间为 3s，
+#         # 那么 20 个点代表预测范围内最大速度投影到路径上的 33%）。如果有疑问，
+#         # prediction_horizon_s * max_speed / path_resolution / 3.0 是一个很好的基准。= 3 * 0.8 / 0.1 / 3.0
+#         use_path_orientations: false
+
+#       PathFollowCritic: #? 激励沿路径取得进展，这与 PathAlignCritic 有什么区别？
+#         enabled: true
+#         cost_power: 1
+#         cost_weight: 5.0
+#         offset_from_furthest: 10 # 任何轨迹到达的最远点之后的路径点数量，用于驱动相对路径跟踪。
+#         threshold_to_consider: 0.7 # 也就是说，在机器人处于目标的此距离内之前，将考虑路径跟随，此时目标评价器将接管。
+
+#       PathAngleCritic: # 此评价器惩罚与路径相对角度较大的轨迹。这有助于机器人在由于累积的角度误差较大而需要时进行急转弯。
+#         enabled: false
+#         cost_power: 1 
+#         cost_weight: 2.0
+#         offset_from_furthest: 4
+#         threshold_to_consider: 0.5
+#         max_angle_to_furthest: 1.0
+#         mode: 0
+
+#       TwirlingCritic:
+#         enabled: true
+#         twirling_cost_power: 1
+#         twirling_cost_weight: 10.0
 controller_server:
   ros__parameters:
     use_sim_time: false
     odom_topic: odometry
-    controller_frequency: 20.0
+    controller_frequency: 50.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
@@ -377,7 +563,7 @@ controller_server:
       use_interpolation: false
       use_rotate_to_heading: false
       use_rotate_to_heading_treshold: 0.1
-      min_approach_linear_velocity: 0.5
+      min_approach_linear_velocity: 0.5  #0.5
       approach_velocity_scaling_dist: 1.0
       v_linear_min: -2.5
       v_linear_max: 2.5
@@ -388,7 +574,7 @@ controller_server:
       reduction_ratio_at_high_curvature: 0.5            # 高曲率时的速度降低比例。 0.5 (即减速 50%)
       curvature_forward_dist: 0.7                       # 前向距离，用于曲率计算
       curvature_backward_dist: 0.3                      # 后向距离，用于曲率计算
-      max_velocity_scaling_factor_rate: 0.9             # 速度缩放因子的最大变化率
+      max_velocity_scaling_factor_rate: 0.7             # 速度缩放因子的最大变化率
 
 local_costmap:
   local_costmap:
@@ -402,9 +588,8 @@ local_costmap:
       width: 5
       height: 5
       resolution: 0.05
-      robot_radius: 0.3
+      robot_radius: 0.4
       plugins: ["static_layer", "intensity_voxel_layer", "inflation_layer"]
-      
       intensity_voxel_layer:
         plugin: pb_nav2_costmap_2d::IntensityVoxelLayer
         enabled: true
@@ -412,104 +597,82 @@ local_costmap:
         footprint_clearing_enabled: true
         publish_voxel_map: false
         combination_method: 1
-        mark_threshold: 3 
+        mark_threshold: 1  # 标记阈值 0或者1
         origin_z: 0.0
         unknown_threshold: 5
         z_resolution: 0.05
-        z_voxels: 16
-        min_obstacle_height: 0.05 
+        # z_voxels: 16
+        min_obstacle_height: 0.0
         max_obstacle_height: 2.0
         min_obstacle_intensity: 0.1
         max_obstacle_intensity: 2.0
-        
         observation_sources: terrain_map
-        
         terrain_map:
           data_type: PointCloud2
-          topic: terrain_map
-          sensor_frame: front_mid360
-          
-          # --- 关键配置 ---
-          clearing: true           # 允许清除 (消除鬼影)
-          marking: true            # 允许标记
-          observation_persistence: 1.0  # 关键! 障碍物保留 1.0 秒，防止闪烁导致规划卡死
-          raytrace_max_range: 3.0  # 必须大于 obstacle_max_range 以便清除边界外的障碍
-          raytrace_min_range: 0.0  
-          # ----------------
-          
+          # '<robot_namespace>' keyword shall be replaced with 'namespace' where user defined.
+          # It doesn't need to start with '/'
+          topic: /terrain_map
+          sensor_frame: livox_frame
           min_obstacle_height: 0.0
           max_obstacle_height: 2.0
           obstacle_max_range: 5.0
           obstacle_min_range: 0.2
-
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
-      
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 4.0
-        inflation_radius: 0.7
-        always_send_full_costmap: False
+        cost_scaling_factor: 2.5
+        inflation_radius: 0.85  # 膨胀系数0.5
+      always_send_full_costmap: False
 
 global_costmap:
   global_costmap:
     ros__parameters:
-      use_sim_time: false
+      use_sim_time: False
       update_frequency: 5.0
       publish_frequency: 2.0
       global_frame: map
       robot_base_frame: base_link_fake
-      robot_radius: 0.3
+      robot_radius: 0.4
       resolution: 0.05
+      track_unknown_space: true
       plugins: ["static_layer", "intensity_voxel_layer", "inflation_layer"]
-      
       intensity_voxel_layer:
         plugin: pb_nav2_costmap_2d::IntensityVoxelLayer
         enabled: true
         track_unknown_space: true
-        footprint_clearing_enabled: true
+        footprint_clearing_enabled: True
         publish_voxel_map: false
         combination_method: 1
-        mark_threshold: 3 
+        mark_threshold: 1   # 标记阈值 0或者1
         origin_z: 0.0
         unknown_threshold: 5
         z_resolution: 0.05
         z_voxels: 16
-        min_obstacle_height: 0.05 
+        min_obstacle_height: 0.0
         max_obstacle_height: 2.0
         min_obstacle_intensity: 0.1
         max_obstacle_intensity: 2.0
-        
         observation_sources: terrain_map_ext
-        
         terrain_map_ext:
           data_type: PointCloud2
-          topic: terrain_map_ext
-          sensor_frame: front_mid360
-          
-          # --- 关键配置 ---
-          clearing: true           
-          marking: true
-          observation_persistence: 1.0  # 全局地图也建议加上，保证规划稳定性
-          raytrace_max_range: 11.0 
-          raytrace_min_range: 0.0
-          # ----------------
-          
+          # '<robot_namespace>' keyword shall be replaced with 'namespace' where user defined.
+          # It doesn't need to start with '/'
+          topic: /terrain_map_ext
+          sensor_frame: livox_frame
           min_obstacle_height: 0.0
           max_obstacle_height: 2.0
           obstacle_max_range: 10.0
           obstacle_min_range: 0.2
-
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
-      
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 4.0
-        inflation_radius: 0.7
-        always_send_full_costmap: False
+        inflation_radius: 0.85  # 膨胀系数0.8
+      always_send_full_costmap: False
 
 # The yaml_filename does not need to be specified since it going to be set by defaults in launch.
 # If you'd rather set it in the yaml, remove the default "map" value in the tb3_simulation_launch.py
@@ -571,7 +734,7 @@ planner_server:
       plugin: "nav2_theta_star_planner/ThetaStarPlanner" # In Iron and older versions, "/" was used instead of "::"
       how_many_corners: 8
       w_euc_cost: 1.0
-      w_traversal_cost: 10.0
+      w_traversal_cost: 17.0
       w_heuristic_cost: 1.0
 
 smoother_server:
@@ -616,6 +779,7 @@ behavior_server:
     max_radius: 2.0
     visualize: false
 
+
 waypoint_follower:
   ros__parameters:
     use_sim_time: false
@@ -626,6 +790,7 @@ waypoint_follower:
       plugin: "nav2_waypoint_follower::WaitAtWaypoint"
       enabled: True
       waypoint_pause_duration: 200
+
 
 velocity_smoother:
   ros__parameters:
@@ -677,3 +842,4 @@ pb_teleop_twist_joy_node:
       roll: 0.0
       pitch: -1.5
       yaw: 3.5
+

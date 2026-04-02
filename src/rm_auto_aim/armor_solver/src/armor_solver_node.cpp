@@ -30,14 +30,15 @@ namespace pka::auto_aim {
 ArmorSolverNode::ArmorSolverNode(const rclcpp::NodeOptions &options)
 : Node("armor_solver", options), solver_(nullptr) {
   // Register logger（注册节点）
-  PKA_REGISTER_LOGGER("armor_solver", "~/fyt2024-log", INFO);
   PKA_INFO("armor_solver", "Starting ArmorSolverNode!");
 
   // 是否为调试模式
   debug_mode_ = this->declare_parameter("debug", true);
 
+  // 最大跟踪距离：超过此距离的装甲板直接丢弃，不进行 tracker 和 solver 处理
+  max_armor_distance_ = this->declare_parameter("max_armor_distance", 5.8);
+
   // Tracker
-  // 跟踪器（注意一下这两个参数！！！）
   double max_match_distance = this->declare_parameter("tracker.max_match_distance", 0.2);
   double max_match_yaw_diff = this->declare_parameter("tracker.max_match_yaw_diff", 1.0);
   // 创建跟踪器
@@ -47,37 +48,46 @@ ArmorSolverNode::ArmorSolverNode(const rclcpp::NodeOptions &options)
   // 判断为丢失目标的阈值（度量为丢帧时间）
   lost_time_thres_ = this->declare_parameter("tracker.lost_time_thres", 0.3);
 
+  // -------------------------------------------------------
+  // EKF 自稳定参数（从 yaml 读取，注入 tracker）
+  // ekf_stabilize.enable:       是否开启
+  // ekf_stabilize.frames:       限速持续帧数
+  // ekf_stabilize.max_v:        线速度上限 (m/s)
+  // ekf_stabilize.max_v_yaw:    角速度上限 (rad/s)
+  // -------------------------------------------------------
+  // -------------------------------------------------------
+  // 速度限幅（Velocity Clamp）参数
+  // tracker 从 LOST 重新识别后，前 vel_clamp_frames 帧内对 EKF update()
+  // 输出的速度分量做硬限幅，防止初始化瞬间异常速度冲量导致云台抽风。
+  // -------------------------------------------------------
+  tracker_->vel_clamp_frames      = this->declare_parameter("vel_clamp.frames",      5);
+  tracker_->vel_clamp_linear_max  = this->declare_parameter("vel_clamp.linear_max",  3.0);
+  tracker_->vel_clamp_yaw_max     = this->declare_parameter("vel_clamp.yaw_max",     4.0);
+
   // EKF
   // xa = x_armor, xc = x_robot_center
-  // 状态：
-  // state: xc, v_xc, yc, v_yc, zc, v_zc, yaw, v_yaw, r, d_zc
-  // 测量
-  // measurement: p, y, d, yaw
-  // f - Process function 过程
-  // dt = 0.005
-  // dt为采样频率
+  // 状态：xc, v_xc, yc, v_yc, zc, v_zc, yaw, v_yaw, r, d_zc
+  // 测量：p, y, d, yaw
   auto f = Predict(0.005);
-  // h - Observation function 观测
   auto h = Measure();
   // 过程噪声协方差矩阵
-  // update_Q - process noise covariance matrix
-  s2qx_ = declare_parameter("ekf.sigma2_q_x", 20.0);
-  s2qy_ = declare_parameter("ekf.sigma2_q_y", 20.0);
-  s2qz_ = declare_parameter("ekf.sigma2_q_z", 20.0);
+  s2qx_   = declare_parameter("ekf.sigma2_q_x",   20.0);
+  s2qy_   = declare_parameter("ekf.sigma2_q_y",   20.0);
+  s2qz_   = declare_parameter("ekf.sigma2_q_z",   20.0);
   s2qyaw_ = declare_parameter("ekf.sigma2_q_yaw", 100.0);
-  s2qr_ = declare_parameter("ekf.sigma2_q_r", 800.0);
-  s2qd_zc_ = declare_parameter("ekf.sigma2_q_d_zc", 800.0);
+  s2qr_   = declare_parameter("ekf.sigma2_q_r",   800.0);
+  s2qd_zc_= declare_parameter("ekf.sigma2_q_d_zc",800.0);
 
   auto u_q = [this]() 
   {
     Eigen::Matrix<double, X_N, X_N> q;
-    double t = dt_, x = s2qx_, y = s2qy_, z = s2qz_, yaw = s2qyaw_, r = s2qr_, d_zc=s2qd_zc_;
+    double t = dt_, x = s2qx_, y = s2qy_, z = s2qz_, yaw = s2qyaw_, r = s2qr_, d_zc = s2qd_zc_;
     double q_x_x = pow(t, 4) / 4 * x, q_x_vx = pow(t, 3) / 2 * x, q_vx_vx = pow(t, 2) * x;
     double q_y_y = pow(t, 4) / 4 * y, q_y_vy = pow(t, 3) / 2 * y, q_vy_vy = pow(t, 2) * y;
     double q_z_z = pow(t, 4) / 4 * x, q_z_vz = pow(t, 3) / 2 * x, q_vz_vz = pow(t, 2) * z;
-    double q_yaw_yaw = pow(t, 4) / 4 * yaw, q_yaw_vyaw = pow(t, 3) / 2 * x,
+    double q_yaw_yaw   = pow(t, 4) / 4 * yaw, q_yaw_vyaw = pow(t, 3) / 2 * x,
            q_vyaw_vyaw = pow(t, 2) * yaw;
-    double q_r = pow(t, 4) / 4 * r;
+    double q_r    = pow(t, 4) / 4 * r;
     double q_d_zc = pow(t, 4) / 4 * d_zc;
     // clang-format off
     //    xc      v_xc    yc      v_yc    zc      v_zc    yaw         v_yaw       r       d_za
@@ -91,16 +101,14 @@ ArmorSolverNode::ArmorSolverNode(const rclcpp::NodeOptions &options)
           0,      0,      0,      0,      0,      0,      q_yaw_vyaw, q_vyaw_vyaw,0,      0,
           0,      0,      0,      0,      0,      0,      0,          0,          q_r,    0,
           0,      0,      0,      0,      0,      0,      0,          0,          0,      q_d_zc;
-
     // clang-format on
     return q;
   };
 
   // 测量噪声协方差矩阵
-  // update_R - measurement noise covariance matrix
-  r_x_ = declare_parameter("ekf.r_x", 0.05);
-  r_y_ = declare_parameter("ekf.r_y", 0.05);
-  r_z_ = declare_parameter("ekf.r_z", 0.05);
+  r_x_   = declare_parameter("ekf.r_x",   0.05);
+  r_y_   = declare_parameter("ekf.r_y",   0.05);
+  r_z_   = declare_parameter("ekf.r_z",   0.05);
   r_yaw_ = declare_parameter("ekf.r_yaw", 0.02);
   auto u_r = [this](const Eigen::Matrix<double, Z_N, 1> &z) 
   {
@@ -115,31 +123,17 @@ ArmorSolverNode::ArmorSolverNode(const rclcpp::NodeOptions &options)
   };
 
   // 误差估计协方差矩阵
-  // P - error estimate covariance matrix
   Eigen::DiagonalMatrix<double, X_N> p0;
-  // 将p0初始化为单位阵，即对角线都为1的矩阵
   p0.setIdentity();
   tracker_->ekf = std::make_unique<RobotStateEKF>(f, h, u_q, u_r, p0);
 
   // Subscriber with tf2 message_filter
-  // 具有 tf2 message_filter的订阅者
-  // tf2 relevant
-  // tf2 关系
   tf2_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
-  // Create the timer interface before call to waitForTransform,
-  // to avoid a tf2_ros::CreateTimerInterfaceException exception
-  /*
-  在调用waitForTransform之前创建定时器接口，
-  以避免 tf2_ros::CreateTimerInterfaceException异常
-  */
   auto timer_interface = std::make_shared<tf2_ros::CreateTimerROS>(
     this->get_node_base_interface(), this->get_node_timers_interface());
   tf2_buffer_->setCreateTimerInterface(timer_interface);
   tf2_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf2_buffer_);
-  // subscriber and filter
-  // 订阅者和过滤器
 
-  // 装甲板的订阅（已经被识别的装甲板）
   armors_sub_.subscribe(this, "armor_detector/armors", rmw_qos_profile_sensor_data);
   target_frame_ = this->declare_parameter("target_frame", "odom");
   tf2_filter_ = std::make_shared<tf2_filter>(armors_sub_,
@@ -149,22 +143,15 @@ ArmorSolverNode::ArmorSolverNode(const rclcpp::NodeOptions &options)
                                              this->get_node_logging_interface(),
                                              this->get_node_clock_interface(),
                                              std::chrono::duration<int>(1));
-  // Register a callback with tf2_ros::MessageFilter to be called when
-  // transforms are available
-  // 注册一个回调函数，以便转换时可用
   tf2_filter_->registerCallback(&ArmorSolverNode::armorsCallback, this);
 
   // Measurement publisher (for debug usage)
-  // 测量量发布（用于调试）
   measure_pub_ = this->create_publisher<rm_interfaces::msg::Measurement>("armor_solver/measurement",
                                                                          rclcpp::SensorDataQoS());
 
   // Publisher
-  // 目标发布
   target_pub_ = this->create_publisher<rm_interfaces::msg::Target>("armor_solver/target",
                                                                    rclcpp::SensorDataQoS());
-
-  //云台指令发布                                                                 
   gimbal_pub_ = this->create_publisher<rm_interfaces::msg::GimbalCmd>("armor_solver/cmd_gimbal",
                                                                       rclcpp::SensorDataQoS());
   // Timer 250 Hz
@@ -173,7 +160,6 @@ ArmorSolverNode::ArmorSolverNode(const rclcpp::NodeOptions &options)
   armor_target_.header.frame_id = "";
 
   // Enable/Disable Armor Solver
-  // 启用/禁用 Armor 解算器
   enable_ = true;
   set_mode_srv_ = this->create_service<rm_interfaces::srv::SetMode>(
     "armor_solver/set_mode",
@@ -202,19 +188,17 @@ void ArmorSolverNode::timerCallback()
   }
 
   // Init message
-  // 初始化信息
   rm_interfaces::msg::GimbalCmd control_msg;
 
   // If target never detected
-  // 如果从未检测到目标
   if (armor_target_.header.frame_id.empty()) 
   {
-    control_msg.yaw_diff = 0;
+    control_msg.yaw_diff   = 0;
     control_msg.pitch_diff = 0;
-    control_msg.distance = -1;
-    control_msg.pitch = 0;
-    control_msg.yaw = 0;
-    control_msg.fire_advice = false;
+    control_msg.distance   = -1;
+    control_msg.pitch      = 0;
+    control_msg.yaw        = 0;
+    control_msg.fire_advice= false;
     gimbal_pub_->publish(control_msg);
     return;
   }
@@ -224,24 +208,23 @@ void ArmorSolverNode::timerCallback()
   {
     try 
     {
-      // armor_target_为目标装甲板
       control_msg = solver_->solve(armor_target_, this->now(), tf2_buffer_);
     } 
     catch (...) 
     {
       PKA_ERROR("armor_solver", "Something went wrong in solver!");
-      control_msg.yaw_diff = 0;
+      control_msg.yaw_diff   = 0;
       control_msg.pitch_diff = 0;
-      control_msg.distance = -1;
-      control_msg.fire_advice = false;
+      control_msg.distance   = -1;
+      control_msg.fire_advice= false;
     }
   } 
   else 
   {
-    control_msg.yaw_diff = 0;
+    control_msg.yaw_diff   = 0;
     control_msg.pitch_diff = 0;
-    control_msg.distance = -1;
-    control_msg.fire_advice = false;
+    control_msg.distance   = -1;
+    control_msg.fire_advice= false;
   }
   gimbal_pub_->publish(control_msg);
 
@@ -253,40 +236,38 @@ void ArmorSolverNode::timerCallback()
 
 void ArmorSolverNode::initMarkers() noexcept 
 {
-  // Visualization Marker Publisher
-  // See http://wiki.ros.org/rviz/DisplayTypes/Marker
-  position_marker_.ns = "position";
+  position_marker_.ns   = "position";
   position_marker_.type = visualization_msgs::msg::Marker::SPHERE;
   position_marker_.scale.x = position_marker_.scale.y = position_marker_.scale.z = 0.1;
   position_marker_.color.a = 1.0;
   position_marker_.color.g = 1.0;
   linear_v_marker_.type = visualization_msgs::msg::Marker::ARROW;
-  linear_v_marker_.ns = "linear_v";
+  linear_v_marker_.ns   = "linear_v";
   linear_v_marker_.scale.x = 0.03;
   linear_v_marker_.scale.y = 0.05;
   linear_v_marker_.color.a = 1.0;
   linear_v_marker_.color.r = 1.0;
   linear_v_marker_.color.g = 1.0;
   angular_v_marker_.type = visualization_msgs::msg::Marker::ARROW;
-  angular_v_marker_.ns = "angular_v";
+  angular_v_marker_.ns   = "angular_v";
   angular_v_marker_.scale.x = 0.03;
   angular_v_marker_.scale.y = 0.05;
   angular_v_marker_.color.a = 1.0;
   angular_v_marker_.color.b = 1.0;
   angular_v_marker_.color.g = 1.0;
-  armors_marker_.ns = "filtered_armors";
+  armors_marker_.ns   = "filtered_armors";
   armors_marker_.type = visualization_msgs::msg::Marker::CUBE;
   armors_marker_.scale.x = 0.03;
   armors_marker_.scale.z = 0.125;
   armors_marker_.color.a = 1.0;
   armors_marker_.color.b = 1.0;
-  selection_marker_.ns = "selection";
+  selection_marker_.ns   = "selection";
   selection_marker_.type = visualization_msgs::msg::Marker::SPHERE;
   selection_marker_.scale.x = selection_marker_.scale.y = selection_marker_.scale.z = 0.1;
   selection_marker_.color.a = 1.0;
   selection_marker_.color.g = 1.0;
   selection_marker_.color.r = 1.0;
-  trajectory_marker_.ns = "trajectory";
+  trajectory_marker_.ns   = "trajectory";
   trajectory_marker_.type = visualization_msgs::msg::Marker::POINTS;
   trajectory_marker_.scale.x = 0.01;
   trajectory_marker_.scale.y = 0.01;
@@ -303,26 +284,21 @@ void ArmorSolverNode::initMarkers() noexcept
 void ArmorSolverNode::armorsCallback(const rm_interfaces::msg::Armors::SharedPtr armors_msg) 
 {
   // Lazy initialize solver owing to weak_from_this() can't be called in constructor
-  // 由于无法在构造函数中调用 weak_from_this（） 而导致的延迟初始化求解器
   if (solver_ == nullptr) 
   {
-    // 如果solver_为nullptr则创建Solver类
     solver_ = std::make_unique<Solver>(weak_from_this());
   }
 
   // Tranform armor position from image frame to world coordinate
-  // 将装甲位置从图像帧转换为世界坐标
   for (auto &armor : armors_msg->armors) 
   {
     geometry_msgs::msg::PoseStamped ps;
     ps.header = armors_msg->header;
-    ps.pose = armor.pose;
+    ps.pose   = armor.pose;
     try 
     {
-      // 将pose转换到指定的目标坐标系target_frame_
       armor.pose = tf2_buffer_->transform(ps, target_frame_).pose;
     } 
-    // tf2::TransformException用于表示在进行坐标系转换时可能发生的错误，&ex用于记录错误信息
     catch (const tf2::TransformException &ex) 
     {
       PKA_ERROR("armor_solver", "Transform error: {}", ex.what());
@@ -331,54 +307,61 @@ void ArmorSolverNode::armorsCallback(const rm_interfaces::msg::Armors::SharedPtr
   }
 
   // Filter abnormal armors
-  // 过滤异常的装甲板
-  armors_msg->armors.erase(std::remove_if(armors_msg->armors.begin(),armors_msg->armors.end(),[](const rm_interfaces::msg::Armor &armor) 
-                                          {
-                                            // 世界坐标系下面如果z轴坐标大于2m就筛掉
-                                            return abs(armor.pose.position.z) > 2;
-                                          }),
-                                          armors_msg->armors.end());
+  armors_msg->armors.erase(
+    std::remove_if(armors_msg->armors.begin(), armors_msg->armors.end(),
+                   [](const rm_interfaces::msg::Armor &armor) {
+                     return abs(armor.pose.position.z) > 2;
+                   }),
+    armors_msg->armors.end());
+
+  // Filter armors that exceed max_armor_distance
+  // 距离超过阈值的装甲板直接丢弃，tracker 和 solver 完全不感知
+  armors_msg->armors.erase(
+    std::remove_if(armors_msg->armors.begin(), armors_msg->armors.end(),
+                   [this](const rm_interfaces::msg::Armor &armor) {
+                     const auto &p = armor.pose.position;
+                     double dist = std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+                     if (dist > max_armor_distance_) {
+                       PKA_DEBUG("armor_solver",
+                                 "Armor {} filtered: distance {:.2f} m > max {:.2f} m",
+                                 armor.number, dist, max_armor_distance_);
+                       return true;
+                     }
+                     return false;
+                   }),
+    armors_msg->armors.end());
 
   // Init message
-  // 初始化数据
   rm_interfaces::msg::Measurement measure_msg;
   rm_interfaces::msg::Target target_msg;
   rclcpp::Time time = armors_msg->header.stamp;
-  target_msg.header.stamp = time;
-  // 目标坐标系
+  target_msg.header.stamp    = time;
   target_msg.header.frame_id = target_frame_;
 
-
   // Update tracker
-  // 更新跟踪器
   if (tracker_->tracker_state == Tracker::LOST) 
   {
-    // 已经过滤掉异常装甲板信息之后的装甲板信息
     tracker_->init(armors_msg);
     target_msg.tracking = false;
   } 
   else 
   {
     dt_ = (time - last_time_).seconds();
-    // lost_time_thres_ = 0.3 初始值
     tracker_->lost_thres = std::abs(static_cast<int>(lost_time_thres_ / dt_));
-    // 判断是否为前哨战
     if (tracker_->tracked_id == "outpost") 
     {
-      // 设置预测模型为恒定旋转速度
       tracker_->ekf->setPredictFunc(Predict{dt_, MotionModel::CONSTANT_ROTATION});
     } 
     else 
     {
-      // 设置预测模型为恒定速度和恒定旋转速度
       tracker_->ekf->setPredictFunc(Predict{dt_, MotionModel::CONSTANT_VEL_ROT});
     }
     
     tracker_->update(armors_msg);
     // Publish measurement
-    measure_msg.x = tracker_->measurement(0);
-    measure_msg.y = tracker_->measurement(1);
-    measure_msg.z = tracker_->measurement(2);
+    measure_msg.x   = tracker_->measurement(0);
+    measure_msg.y   = tracker_->measurement(1);
+    measure_msg.z   = tracker_->measurement(2);
     measure_msg.yaw = tracker_->measurement(3);
     measure_pub_->publish(measure_msg);
 
@@ -386,31 +369,29 @@ void ArmorSolverNode::armorsCallback(const rm_interfaces::msg::Armors::SharedPtr
     {
       target_msg.tracking = false;
     } 
-    else if (tracker_->tracker_state == Tracker::TRACKING || tracker_->tracker_state == Tracker::TEMP_LOST) 
+    else if (tracker_->tracker_state == Tracker::TRACKING ||
+             tracker_->tracker_state == Tracker::TEMP_LOST) 
     {
       target_msg.tracking = true;
-      // Fill target message
-      // 填充目标数据
       const auto &state = tracker_->target_state;
-      target_msg.id = tracker_->tracked_id;
-      target_msg.armors_num = static_cast<int>(tracker_->tracked_armors_num);
-      target_msg.position.x = state(0);
-      target_msg.velocity.x = state(1);
-      target_msg.position.y = state(2);
-      target_msg.velocity.y = state(3);
-      target_msg.position.z = state(4);
-      target_msg.velocity.z = state(5);
-      target_msg.yaw = state(6);
-      target_msg.v_yaw = state(7);
-      target_msg.radius_1 = state(8);
-      target_msg.radius_2 = tracker_->another_r;
-      target_msg.d_zc = state(9);
-      target_msg.d_za = tracker_->d_za;
+      target_msg.id          = tracker_->tracked_id;
+      target_msg.armors_num  = static_cast<int>(tracker_->tracked_armors_num);
+      target_msg.position.x  = state(0);
+      target_msg.velocity.x  = state(1);
+      target_msg.position.y  = state(2);
+      target_msg.velocity.y  = state(3);
+      target_msg.position.z  = state(4);
+      target_msg.velocity.z  = state(5);
+      target_msg.yaw         = state(6);
+      target_msg.v_yaw       = state(7);
+      target_msg.radius_1    = state(8);
+      target_msg.radius_2    = tracker_->another_r;
+      target_msg.d_zc        = state(9);
+      target_msg.d_za        = tracker_->d_za;
     }
   }
 
   // Store and Publish the target_msg
-  // 储存和发布target_msg
   armor_target_ = target_msg;
   target_pub_->publish(target_msg);
 
@@ -419,12 +400,12 @@ void ArmorSolverNode::armorsCallback(const rm_interfaces::msg::Armors::SharedPtr
 
 void ArmorSolverNode::publishMarkers(const rm_interfaces::msg::Target &target_msg,
                                      const rm_interfaces::msg::GimbalCmd &gimbal_cmd) noexcept {
-  position_marker_.header = target_msg.header;
-  linear_v_marker_.header = target_msg.header;
+  position_marker_.header  = target_msg.header;
+  linear_v_marker_.header  = target_msg.header;
   angular_v_marker_.header = target_msg.header;
-  armors_marker_.header = target_msg.header;
+  armors_marker_.header    = target_msg.header;
   selection_marker_.header = target_msg.header;
-  trajectory_marker_.header = target_msg.header;
+  trajectory_marker_.header= target_msg.header;
 
   visualization_msgs::msg::MarkerArray marker_array;
 
@@ -455,19 +436,17 @@ void ArmorSolverNode::publishMarkers(const rm_interfaces::msg::Target &target_ms
     arrow_end.z += target_msg.v_yaw / M_PI;
     angular_v_marker_.points.emplace_back(arrow_end);
 
-    armors_marker_.action = visualization_msgs::msg::Marker::ADD;
+    armors_marker_.action  = visualization_msgs::msg::Marker::ADD;
     armors_marker_.scale.y = tracker_->tracked_armor.type == "small" ? 0.135 : 0.23;
-    // Draw armors
     bool is_current_pair = true;
     size_t a_n = target_msg.armors_num;
     geometry_msgs::msg::Point p_a;
     double r = 0;
     for (size_t i = 0; i < a_n; i++) {
       double tmp_yaw = yaw + i * (2 * M_PI / a_n);
-      // Only 4 armors has 2 radius and height
       if (a_n == 4) {
         r = is_current_pair ? r1 : r2;
-        p_a.z = zc + d_zc +  (is_current_pair ? 0 : d_za);
+        p_a.z = zc + d_zc + (is_current_pair ? 0 : d_za);
         is_current_pair = !is_current_pair;
       } else {
         r = r1;
@@ -486,9 +465,9 @@ void ArmorSolverNode::publishMarkers(const rm_interfaces::msg::Target &target_ms
 
     selection_marker_.action = visualization_msgs::msg::Marker::ADD;
     selection_marker_.points.clear();
-    selection_marker_.pose.position.y = gimbal_cmd.distance * sin(gimbal_cmd.yaw * M_PI / 180);
-    selection_marker_.pose.position.x = gimbal_cmd.distance * cos(gimbal_cmd.yaw * M_PI / 180);
-    selection_marker_.pose.position.z = gimbal_cmd.distance * sin(gimbal_cmd.pitch * M_PI / 180);
+    selection_marker_.pose.position.y = gimbal_cmd.distance * sin(gimbal_cmd.yaw   * M_PI / 180.0);
+    selection_marker_.pose.position.x = gimbal_cmd.distance * cos(gimbal_cmd.yaw   * M_PI / 180.0);
+    selection_marker_.pose.position.z = gimbal_cmd.distance * sin(gimbal_cmd.pitch * M_PI / 180.0);
 
     trajectory_marker_.action = visualization_msgs::msg::Marker::ADD;
     trajectory_marker_.points.clear();
@@ -512,15 +491,14 @@ void ArmorSolverNode::publishMarkers(const rm_interfaces::msg::Target &target_ms
       trajectory_marker_.color.g = 1;
       trajectory_marker_.color.b = 1;
     }
-
   } 
   else 
   {
-    position_marker_.action = visualization_msgs::msg::Marker::DELETE;
-    linear_v_marker_.action = visualization_msgs::msg::Marker::DELETE;
+    position_marker_.action  = visualization_msgs::msg::Marker::DELETE;
+    linear_v_marker_.action  = visualization_msgs::msg::Marker::DELETE;
     angular_v_marker_.action = visualization_msgs::msg::Marker::DELETE;
-    armors_marker_.action = visualization_msgs::msg::Marker::DELETE;
-    trajectory_marker_.action = visualization_msgs::msg::Marker::DELETE;
+    armors_marker_.action    = visualization_msgs::msg::Marker::DELETE;
+    trajectory_marker_.action= visualization_msgs::msg::Marker::DELETE;
     selection_marker_.action = visualization_msgs::msg::Marker::DELETE;
   }
 
@@ -567,8 +545,4 @@ void ArmorSolverNode::setModeCallback(
 }  // namespace pka::auto_aim
 
 #include "rclcpp_components/register_node_macro.hpp"
-
-// Register the component with class_loader.
-// This acts as a sort of entry point, allowing the component to be discoverable
-// when its library is being loaded into a running process.
 RCLCPP_COMPONENTS_REGISTER_NODE(pka::auto_aim::ArmorSolverNode)

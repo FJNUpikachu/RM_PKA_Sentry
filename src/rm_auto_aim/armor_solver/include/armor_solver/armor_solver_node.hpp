@@ -64,6 +64,10 @@ private:
   
   bool debug_mode_;
 
+  // Maximum distance to track an armor (meters)
+  // 超过此距离的装甲板将被直接忽略，不进行跟踪和解算
+  double max_armor_distance_;
+
   // Heartbeat
   HeartBeatPublisher::SharedPtr heartbeat_;
 

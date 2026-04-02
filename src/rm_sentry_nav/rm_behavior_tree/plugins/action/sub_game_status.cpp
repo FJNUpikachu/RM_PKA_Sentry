@@ -13,6 +13,7 @@ SubGameStatusAction::SubGameStatusAction(
 BT::NodeStatus SubGameStatusAction::onTick(
   const std::shared_ptr<rm_interfaces::msg::GameStatus> & last_msg)
 {
+  // std::cout<<std::to_string(last_msg->game_progress).c_str()<<std::endl;
   if (last_msg)  // empty if no new message received, since the last tick
   {
     RCLCPP_DEBUG(

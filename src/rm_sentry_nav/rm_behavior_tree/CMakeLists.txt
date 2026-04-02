@@ -105,6 +105,11 @@ ament_auto_add_library(is_status_bad SHARED
 )
 add_target_dependencies(is_status_bad)
 
+ament_auto_add_library(is_arrived SHARED 
+    plugins/condition/is_arrived.cpp
+)
+add_target_dependencies(is_arrived)
+
 # Actions
 ament_auto_add_library(send_goal SHARED 
     plugins/action/send_goal.cpp
@@ -115,6 +120,11 @@ ament_auto_add_library(sub_all_robot_hp SHARED
     plugins/action/sub_all_robot_hp.cpp
 )
 add_target_dependencies(sub_all_robot_hp)
+
+ament_auto_add_library(mark_arrived SHARED 
+    plugins/action/mark_arrived.cpp
+)
+add_target_dependencies(mark_arrived)
 
 ament_auto_add_library(sub_robot_status SHARED 
     plugins/action/sub_robot_status.cpp

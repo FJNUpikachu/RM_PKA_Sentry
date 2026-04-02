@@ -428,7 +428,7 @@ ros2 run rqt_tf_tree rqt_tf_tree
 ```bash
 git clone https://github.com/FJNUpikachu/RM_PKA_Sentry.git
 git add .
-git commit -m "solver target发值问题与可视化问题基本修复 部分小功能及EKF仍有部分问题"
+git commit -m "启动！"
 git push origin main
 ```
 ```bash
@@ -441,3 +441,7 @@ git push origin instability
 
 ## 致谢
 待更新
+
+ros2 run camera_calibration cameracalibrator --size 7x10 --square 0.022 image:=/image_raw
+
+ros2 topic echo /nav_waypoint_id

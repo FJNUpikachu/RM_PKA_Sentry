@@ -36,7 +36,7 @@ def generate_launch_description():
 
     bringup_cmd_group = GroupAction(
         [
-            PushRosNamespace(namespace="red_standard_robot1"),
+            PushRosNamespace(namespace=""),
             SetRemap("/navigate_to_pose", "navigate_to_pose"),
             SetRemap("/tf", "tf"),
             SetRemap("/tf_static", "tf_static"),
@@ -49,7 +49,7 @@ def generate_launch_description():
                     {
                     'style': bt_xml_dir,
                     'use_sim_time': use_sim_time,
-                    'namespace': "red_standard_robot1",
+                    'namespace': "",
                     }
                 ]
             )

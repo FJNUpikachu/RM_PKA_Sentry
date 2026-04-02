@@ -7,7 +7,6 @@
 #include <cmath>
 #include <memory>
 
-// pkaLoggerCenter ─ 异步落盘 + 彩色终端输出
 #include "rm_utils/pkaLoggerCenter.hpp"
 
 namespace pka {
@@ -20,11 +19,15 @@ UARTNode::UARTNode(const rclcpp::NodeOptions & options)
 {
   PKA_INFO("serial_node", "Starting UARTNode...");
   init_parameters();
+  // 创建协议对象（在 init_parameters 解析完 robot_type_str_ 之后）
+  protocol_ = ProtocolFactory::create(robot_type_);
   init_serial();
   init_subscriber();
   init_publisher();
   init_timer();
-  PKA_INFO("serial_node", "UARTNode started (mode={})", serial_mode_);
+  PKA_INFO("serial_node",
+    "UARTNode started (robot_type={} mode={})",
+    robot_type_to_string(robot_type_), serial_mode_);
 }
 
 UARTNode::~UARTNode()
@@ -34,6 +37,17 @@ UARTNode::~UARTNode()
   if (recv_timer_)         { recv_timer_->cancel(); }
   if (health_timer_)       { health_timer_->cancel(); }
   if (virtual_send_timer_) { virtual_send_timer_->cancel(); }
+
+  int waited_ms = 0;
+  const int wait_step_ms = 50;
+  const int max_wait_ms  = restart_delay_ * 2 + 500;
+  while (restart_in_progress_.load() && waited_ms < max_wait_ms) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(wait_step_ms));
+    waited_ms += wait_step_ms;
+  }
+  if (restart_in_progress_.load()) {
+    PKA_WARN("serial_node", "Restart thread still running at destruction, force continuing");
+  }
 
   if (serial_ && serial_->isOpen()) {
     serial_->close();
@@ -46,6 +60,17 @@ UARTNode::~UARTNode()
 
 void UARTNode::init_parameters()
 {
+  // ── 机器人类型 ────────────────────────────────────────────────────────────
+  robot_type_str_ = declare_parameter("robot_type", std::string("sentry"));
+  try {
+    robot_type_ = robot_type_from_string(robot_type_str_);
+  } catch (const std::invalid_argument & e) {
+    PKA_ERROR("serial_node",
+      "Invalid robot_type='{}', defaulting to sentry. ({})",
+      robot_type_str_, e.what());
+    robot_type_ = RobotType::SENTRY;
+  }
+
   port_name_             = declare_parameter("port_name",              "/dev/ttyACM0");
   baudrate_              = declare_parameter("baudrate",               115200);
   timestamp_offset_      = declare_parameter("timestamp_offset",       0.006);
@@ -62,10 +87,15 @@ void UARTNode::init_parameters()
   enable_auto_restart_   = declare_parameter("enable_auto_restart",    true);
   restart_delay_         = declare_parameter("restart_delay",          1000);
 
-  cmd_vel_linear_scale_  = declare_parameter("cmd_vel_linear_scale",   0.2);
+  cmd_vel_linear_scale_  = declare_parameter("cmd_vel_linear_scale",   0.5);
   gimbal_cmd_topic_      = declare_parameter("gimbal_cmd_topic",       "armor_solver/cmd_gimbal");
   cmd_vel_topic_         = declare_parameter("cmd_vel_topic",          "cmd_vel");
   target_frame_          = declare_parameter("target_frame",           "odom");
+
+  // ── SetMode 服务名（默认与 armor_detector 的服务名一致）──────────────────
+  // 如果有多相机或 namespace 需要修改，可通过此参数覆盖
+  set_mode_service_name_ = declare_parameter(
+    "set_mode_service_name", std::string("armor_detector/set_mode"));
 
   mock_mode_                   = static_cast<uint8_t>(declare_parameter("mock_mode",   0));
   mock_roll_                   = declare_parameter("mock_roll",         0.0f);
@@ -84,20 +114,15 @@ void UARTNode::init_parameters()
 
   if (debug_) {
     PKA_DEBUG("serial_node",
-      "Parameters loaded: port={} baud={} mode={} target_frame={}",
-      port_name_, baudrate_, serial_mode_, target_frame_);
-    PKA_DEBUG("serial_node",
-      "Topics: gimbal_cmd='{}' cmd_vel='{}'",
-      gimbal_cmd_topic_, cmd_vel_topic_);
+      "Parameters loaded: robot_type={} port={} baud={} mode={} target_frame={} "
+      "set_mode_service={}",
+      robot_type_str_, port_name_, baudrate_, serial_mode_, target_frame_,
+      set_mode_service_name_);
   }
 }
 
 // ── 串口初始化 ────────────────────────────────────────────────────────────────
-//
-// 参考 serial_example.cc：
-//   serial::Serial my_serial(port, baud, serial::Timeout::simpleTimeout(1000));
-//   if (my_serial.isOpen()) { ... }
-//
+
 void UARTNode::init_serial()
 {
   if (serial_mode_ == 0) {
@@ -108,38 +133,31 @@ void UARTNode::init_serial()
     return;
   }
 
-  // 先关旧串口（重启场景）
-  if (serial_ && serial_->isOpen()) {
-    serial_->close();
-  }
+  if (serial_ && serial_->isOpen()) { serial_->close(); }
   serial_.reset();
 
   try {
-    // ── 与 example 完全一致的构造方式 ────────────────────────────────────────
-    // serial::Serial my_serial(port, baud, serial::Timeout::simpleTimeout(ms))
     serial_ = std::make_unique<serial::Serial>(
       port_name_,
       static_cast<uint32_t>(baudrate_),
-      serial::Timeout::simpleTimeout(100)  // 100ms timeout，不阻塞定时器
+      serial::Timeout::simpleTimeout(100)
     );
 
-    // ── 与 example 完全一致的 isOpen() 检查 ──────────────────────────────────
     if (serial_->isOpen()) {
       serial_->flush();
-      is_healthy_ = true;
+      is_healthy_                = true;
       consecutive_failure_count_ = 0;
-      last_error_code_ = SerialErrorCode::OK;
-      last_error_msg_  = "OK";
-      last_success_time_ = this->now();
+      last_error_code_           = SerialErrorCode::OK;
+      last_error_msg_            = "OK";
+      last_success_time_         = this->now();
       PKA_INFO("serial_node", "Serial port opened: {} @ {} baud", port_name_, baudrate_);
     } else {
-      PKA_ERROR("serial_node","isOpen() returned false after construction");
-      return;
+      PKA_ERROR("serial_node", "isOpen() returned false after construction");
     }
 
   } catch (const serial::IOException & e) {
     serial_.reset();
-    is_healthy_ = false;
+    is_healthy_      = false;
     last_error_code_ = SerialErrorCode::DEVICE_NOT_FOUND;
     last_error_msg_  = e.what();
     PKA_ERROR("serial_node", "IOException opening [{}]: {}", port_name_, e.what());
@@ -147,7 +165,7 @@ void UARTNode::init_serial()
 
   } catch (const serial::SerialException & e) {
     serial_.reset();
-    is_healthy_ = false;
+    is_healthy_      = false;
     last_error_code_ = SerialErrorCode::UNKNOWN_ERROR;
     last_error_msg_  = e.what();
     PKA_ERROR("serial_node", "SerialException opening [{}]: {}", port_name_, e.what());
@@ -155,7 +173,7 @@ void UARTNode::init_serial()
 
   } catch (const std::invalid_argument & e) {
     serial_.reset();
-    is_healthy_ = false;
+    is_healthy_      = false;
     last_error_code_ = SerialErrorCode::INVALID_PARAMETER;
     last_error_msg_  = e.what();
     PKA_ERROR("serial_node", "InvalidArgument opening serial: {}", e.what());
@@ -181,36 +199,50 @@ void UARTNode::init_subscriber()
         UARTNodeTool::gimbal_cmd_callback(this, msg);
       });
     PKA_INFO("serial_node", "Subscribed to gimbal_cmd: '{}'", gimbal_cmd_topic_);
-  } else {
-    PKA_WARN("serial_node",
-      "gimbal_cmd_topic is empty, fire_advice/pitch/yaw/distance will be 0");
   }
 
-  if (!cmd_vel_topic_.empty()) {
+  // cmd_vel 仅哨兵协议需要（步兵发送帧无底盘速度字段）
+  if (robot_type_ == RobotType::SENTRY && !cmd_vel_topic_.empty()) {
     cmd_vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
       cmd_vel_topic_, rclcpp::SensorDataQoS(),
       [this](const geometry_msgs::msg::Twist::SharedPtr msg) {
         UARTNodeTool::cmd_vel_callback(this, msg);
       });
-    PKA_INFO("serial_node", "Subscribed to cmd_vel: '{}'", cmd_vel_topic_);
-  } else {
-    PKA_WARN("serial_node",
-      "cmd_vel_topic is empty, linear_x/linear_y/angular_z will be 0");
+    PKA_INFO("serial_node", "Subscribed to cmd_vel: '{}' (sentry only)", cmd_vel_topic_);
   }
 }
 
-// ── 发布 ──────────────────────────────────────────────────────────────────────
+// ── 发布 / 服务客户端 ─────────────────────────────────────────────────────────
 
 void UARTNode::init_publisher()
 {
-  recv_pub_ = create_publisher<rm_interfaces::msg::SerialReceiveData>(
-    "serial/receive", rclcpp::SensorDataQoS());
-
   tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
   heartbeat_pub_  = HeartBeatPublisher::create(this);
 
-  if (debug_) {
-    PKA_DEBUG("serial_node", "Publishers and TF broadcaster initialized");
+  // ── SetMode 服务客户端（通知 armor_detector 切换识别颜色）────────────────
+  set_mode_client_ = create_client<rm_interfaces::srv::SetMode>(set_mode_service_name_);
+  PKA_INFO("serial_node",
+    "SetMode client created for service: '{}'", set_mode_service_name_);
+
+  switch (robot_type_) {
+    case RobotType::SENTRY:
+      sentry_recv_pub_ = create_publisher<rm_interfaces::msg::SentrySerialReceiveData>(
+        "serial/receive", rclcpp::SensorDataQoS());
+      game_status_pub_  = create_publisher<rm_interfaces::msg::GameStatus>(
+        "/game_status", 10);
+      rfid_status_pub_  = create_publisher<rm_interfaces::msg::RfidStatus>(
+        "/rfid_status",  10);
+      robot_status_pub_ = create_publisher<rm_interfaces::msg::RobotStatus>(
+        "/robot_status", 10);
+      PKA_INFO("serial_node",
+        "Publishers: serial/receive(sentry), game_status, rfid_status, robot_status");
+      break;
+
+    case RobotType::INFANTRY:
+      infantry_recv_pub_ = create_publisher<rm_interfaces::msg::InfantrySerialReceiveData>(
+        "serial/receive", rclcpp::SensorDataQoS());
+      PKA_INFO("serial_node", "Publishers: serial/receive(infantry)");
+      break;
   }
 }
 
@@ -218,17 +250,19 @@ void UARTNode::init_publisher()
 
 void UARTNode::init_timer()
 {
-  auto hz_ms  = [](double hz)  { return std::chrono::milliseconds(static_cast<int>(1000.0 / hz)); };
-  auto sec_ms = [](double sec) { return std::chrono::milliseconds(static_cast<int>(sec * 1000.0)); };
+  auto hz_ms  = [](double hz)  {
+    return std::chrono::milliseconds(static_cast<int>(1000.0 / hz));
+  };
+  auto sec_ms = [](double sec) {
+    return std::chrono::milliseconds(static_cast<int>(sec * 1000.0));
+  };
 
   switch (serial_mode_) {
     case 0:
       mock_recv_timer_ = create_wall_timer(
         hz_ms(mock_recv_frequency_),
         [this]() { UARTNodeTool::mock_recv_timer_cb(this); });
-      if (debug_) {
-        PKA_DEBUG("serial_node", "Mode=0: mock_recv @ {:.1f} Hz", mock_recv_frequency_);
-      }
+      PKA_DEBUG("serial_node", "Mode=0: mock_recv @ {:.1f} Hz", mock_recv_frequency_);
       break;
 
     case 1:
@@ -241,11 +275,9 @@ void UARTNode::init_timer()
       health_timer_ = create_wall_timer(
         sec_ms(health_check_interval_),
         [this]() { UARTNodeTool::health_timer_cb(this); });
-      if (debug_) {
-        PKA_DEBUG("serial_node",
-          "Mode=1: send@{:.1f}Hz recv@{:.1f}Hz health@{:.1f}s",
-          send_frequency_, read_frequency_, health_check_interval_);
-      }
+      PKA_DEBUG("serial_node",
+        "Mode=1: send@{:.1f}Hz recv@{:.1f}Hz health@{:.1f}s",
+        send_frequency_, read_frequency_, health_check_interval_);
       break;
 
     case 2:
@@ -258,11 +290,9 @@ void UARTNode::init_timer()
       health_timer_ = create_wall_timer(
         sec_ms(health_check_interval_),
         [this]() { UARTNodeTool::health_timer_cb(this); });
-      if (debug_) {
-        PKA_DEBUG("serial_node",
-          "Mode=2: virtual_send@{:.1f}Hz recv@{:.1f}Hz health@{:.1f}s",
-          virtual_send_frequency_, read_frequency_, health_check_interval_);
-      }
+      PKA_DEBUG("serial_node",
+        "Mode=2: virtual_send@{:.1f}Hz recv@{:.1f}Hz health@{:.1f}s",
+        virtual_send_frequency_, read_frequency_, health_check_interval_);
       break;
 
     default:
@@ -272,23 +302,20 @@ void UARTNode::init_timer()
 }
 
 // ── TF 广播 ───────────────────────────────────────────────────────────────────
-//
-// 时间戳 = now() - abs(timestamp_offset_)
-// 保证 armors 消息时间戳（now()）落在 TF buffer 覆盖范围内，
-// 彻底避免 tf2_filter "timestamp earlier than all data" 错误。
-//
-void UARTNode::broadcastGimbalTF(const rm_interfaces::msg::SerialReceiveData & data)
+
+void UARTNode::broadcastGimbalTF(
+  float roll, float pitch, float yaw, float chassis_imu_yaw_offset)
 {
   timestamp_offset_ = this->get_parameter("timestamp_offset").as_double();
 
   tf2::Quaternion q;
   q.setRPY(
-    data.roll  * M_PI / 180.0,
-    data.pitch * M_PI / 180.0,
-    data.yaw   * M_PI / 180.0);
+    static_cast<double>(roll)  * M_PI / 180.0,
+    static_cast<double>(pitch) * M_PI / 180.0,
+    static_cast<double>(yaw)   * M_PI / 180.0);
 
   geometry_msgs::msg::TransformStamped t;
-  t.header.stamp    = this->now() - rclcpp::Duration::from_seconds(std::abs(timestamp_offset_));
+  t.header.stamp    = this->now() + rclcpp::Duration::from_seconds(timestamp_offset_);
   t.header.frame_id = target_frame_;
   t.child_frame_id  = "gimbal_link";
   t.transform.rotation      = tf2::toMsg(q);
@@ -298,10 +325,8 @@ void UARTNode::broadcastGimbalTF(const rm_interfaces::msg::SerialReceiveData & d
   tf_broadcaster_->sendTransform(t);
 
   tf2::Quaternion q1;
-  q1.setRPY(
-    0.0,
-    0.0,
-    data.chassis_imu_yaw_offset   * M_PI / 180.0);
+  q1.setRPY(0.0, 0.0,
+    static_cast<double>(chassis_imu_yaw_offset) * M_PI / 180.0);
 
   geometry_msgs::msg::TransformStamped t1;
   t1.header.stamp    = this->now() - rclcpp::Duration::from_seconds(std::abs(timestamp_offset_));
@@ -315,8 +340,8 @@ void UARTNode::broadcastGimbalTF(const rm_interfaces::msg::SerialReceiveData & d
 
   if (debug_) {
     PKA_DEBUG("serial_node",
-      "TF: {}->gimbal_link  RPY=({:.3f}°, {:.3f}°, {:.3f}°)  stamp=now-{:.4f}s",
-      target_frame_, data.roll, data.pitch, data.yaw, std::abs(timestamp_offset_));
+      "TF: {}->gimbal_link  RPY=({:.3f}°, {:.3f}°, {:.3f}°)",
+      target_frame_, roll, pitch, yaw);
   }
 }
 

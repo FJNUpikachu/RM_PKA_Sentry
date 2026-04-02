@@ -2,51 +2,82 @@
   ros__parameters:
     debug: true
     target_frame: gimbal_odom
-    max_armor_distance: 10.0
+    max_armor_distance: 4.5
 
     ekf:
-      sigma2_q_x: 0.009
-      sigma2_q_y: 0.009
-      sigma2_q_z: 0.009
-      sigma2_q_yaw: 1.1
-      sigma2_q_r: 80.0
+      sigma2_q_x: 0.1
+      sigma2_q_y: 0.1
+      sigma2_q_z: 0.1
+      sigma2_q_yaw: 1.0
+      sigma2_q_r: 98.0
 
-      r_x: 0.00045
-      r_y: 0.00045
-      r_z: 0.00045
-      r_yaw: 0.00075
+      r_x: 0.0005
+      r_y: 0.0005
+      r_z: 0.0005
+      r_yaw: 0.0060
+
+    # 速度限幅（Velocity Clamp）
+    # tracker 从 LOST 重新识别后，前 frames 帧内对 EKF update() 输出的速度分量做硬限幅，
+    # 防止初始化瞬间因坐标系切换抖动/tf2时间戳误差产生异常速度冲量导致云台抽风。
+    # 限幅只作用于 matched 后的 update() 输出，不影响 predict()；
+    # handleArmorJump 不重置计数器，不会误触发。
+    vel_clamp:
+      frames: 10           # 限幅持续帧数
+      linear_max: 0.001     # 线速度上限 (m/s)
+      yaw_max: 0.001        # 角速度上限 (rad/s)，覆盖正常陀螺转速，仅截断异常冲量
 
     tracker:
-      max_match_distance: 0.5
+      max_match_distance: 3.5
       max_match_yaw_diff: 0.7
 
       tracking_thres: 2
-      lost_time_thres: 1.5
+      lost_time_thres: 1.3
     
     solver:
       prediction_delay: 0.0
-      controller_delay: 0.0
-      min_switching_v_yaw: 1.0
-      max_tracking_v_yaw: 60.0 #转速(rad/s)大于这个值时瞄准机器人中心 
-
-      shooting_range_height: 0.135
-      shooting_range_width: 0.135
-
-      side_angle: 15.0 
-      bullet_speed: 20.0
-      compenstator_type: "ideal"
+      controller_delay: -0.002
+      min_switching_v_yaw: 1.8
+      max_tracking_v_yaw: 5.8   # 转速(rad/s)大于此值时切换到瞄准中心模式
+      shooting_range_height: 0.755
+      shooting_range_width: 0.175
+      side_angle: 16.7
+      bullet_speed: 21.1
+      compensator_type: "ideal"
       gravity: 9.82
       resistance: 0.092
-      iteration_times: 20 # 补偿的迭代次数
-      # ["距离下限, 距离上限, 高度下限, 高度下限, pitch轴补偿值"]
+      iteration_times: 20           # 弹道补偿迭代次数
+
+      # 装甲板选择：非对称 coming/leaving 角度（高速旋转时生效）
+      # coming_angle: 向"迎面转来"方向多看，提前锁定即将正对的装甲板
+      # leaving_angle: 向"转走"方向少看，快速放弃转走的装甲板切换到下一块
+      coming_angle: 55.0          # 单位：度
+      leaving_angle: 20.0         # 单位：度
+
+      # 开火容差（基于装甲板投影宽度的自适应计算）
+      # fire_margin:         投影宽度缩放因子（< 1 保守，> 1 宽松；默认 0.8）
+      # min_fire_tolerance:  容差下界（近距离防止窗口过大）单位：度
+      # max_fire_tolerance:  容差上界（远距离防止窗口退化为零）单位：度
+      fire_margin: 0.8
+      min_fire_tolerance: 1.5     # 单位：度
+      max_fire_tolerance: 4.0     # 单位：度
+
+      # 瞄准偏移量（与 launch rpy / urdf 外参解耦）
+      # 用于补偿枪管机械安装偏差或弹道系统性偏差，无需修改 tf/urdf
+      yaw_offset: 0.0             # 单位：度，正值向左
+      pitch_offset: 0.0           # 单位：度，正值向上
+
+      # center_mode：直接瞄准机器人整车中心（旋转陀螺专用）
+      # 注意：此模式独立于 max_tracking_v_yaw 触发的内部状态机，优先级更高
+      center_mode: false             # bool: 是否启用
+      center_dis: 6.20               # float: 距离上限 (m)，超出后不开火
+      center_yaw: 0.335            # float: 云台 yaw 与目标 yaw 误差上限 (rad)，超出后不开火
+
+      # ["距离下限 距离上限 高度下限 高度上限 pitch补偿(deg) yaw补偿(deg)"]
       angle_offset: [
-        "5.0 6.0 -1.0 0.4 0.0 0.0",
-        "5.0 6.0  0.4 0.8 0.0 0.0",
-        "5.0 6.0  0.8 1.2 0.0 0.0",
-        "6.0 7.0 -1.0 0.4 0.0 0.0",
-        "6.0 7.0  0.4 0.8 0.0 0.0",
-        "6.0 7.0  0.8 1.2 0.0 0.0",
-        "7.0 8.0 -1.0 0.4 0.0 0.0",
-        "7.0 8.0  0.4 0.8 0.0 0.0",
-        "7.0 8.0  0.8 1.2 0.0 0.0",
+        "1.0 2.0 -10000.0 1000.0 2.5 0.0",
+        "2.0 3.0 -10000.0 1000.0 3.0 0.1",
+        "3.0 4.0 -10000.0 1000.0 3.5 0.2",
+        "4.0 5.0 -10000.0 1000.0 4.0 0.4",
+        "5.0 6.0 -10000.0 1000.0 4.5 0.5",
+        "6.0 8.0 -10000.0 1000.0 5.0 0.65",
       ]

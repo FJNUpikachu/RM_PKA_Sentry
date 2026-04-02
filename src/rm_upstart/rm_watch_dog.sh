@@ -6,7 +6,7 @@ NAMESPACE="" # 命名空间 例如 "/infantry_3" 注意要有"/"
 NODE_NAMES=("armor_detector" "armor_solver" "serial_driver" "hik_camera_driver")  # 列出所有需要监控的节点名称，注意是用空格分隔
 USER="$(whoami)" #用户名
 HOME_DIR=$(eval echo ~$USER)
-WORKING_DIR="$HOME_DIR/RM_PKA_Sentry" # 代码目录
+WORKING_DIR="$HOME_DIR/RM_PKA_Sentry_2026_New" # 代码目录
 LAUNCH_FILE="rm_bringup bringup.launch.py" # launch 文件
 OUTPUT_FILE="$WORKING_DIR/screen.output" # 终端输出记录文件
 

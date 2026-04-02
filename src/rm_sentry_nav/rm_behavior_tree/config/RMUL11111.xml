@@ -12,7 +12,7 @@
         <WhileDoElse>
           <IsStatusOK message="{robot_status}"
                       hp_threshold="200"/>
-          <SendGoal goal_pose="5;-3.5;0; 0;0;0;1"
+          <SendGoal goal_pose="2.8;-2.62;0; 0;0;0;1"
                     action_name="navigate_to_pose"/>
           <SendGoal goal_pose="0;0;0; 0;0;0;1"
                     action_name="navigate_to_pose"/>

@@ -27,10 +27,7 @@ FakeVelTransform::FakeVelTransform(const rclcpp::NodeOptions & options)
 : Node("fake_vel_transform", options)
 {
   RCLCPP_INFO(get_logger(), "Start FakeVelTransform!");
-  // ===========【必须添加这两行】===========
-  // current_robot_base_angle_ = 0.0;  // 防止未初始化导致的 NaN
-  // last_controller_activate_time_ = this->get_clock()->now(); // 防止刚启动就进入超时逻辑
-  // ======================================
+
   this->declare_parameter<std::string>("robot_base_frame", "gimbal_link");
   this->declare_parameter<std::string>("fake_robot_base_frame", "gimbal_link_fake");
   this->declare_parameter<std::string>("odom_topic", "odom");

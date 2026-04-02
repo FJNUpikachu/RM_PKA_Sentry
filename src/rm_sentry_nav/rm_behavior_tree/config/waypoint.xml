@@ -1,25 +1,33 @@
+      
 <?xml version="1.0" encoding="UTF-8"?>
-<root BTCPP_format="4">
-  <BehaviorTree ID="behaviortree">
-    <RateController hz="1">
-      <SendGoal name="Attack_Left"
-                goal_pose="3.3;10.8;0; 0;0;0;1"
-                action_name="navigate_to_pose"/>
-    </RateController>
+<root BTCPP_format="4" main_tree_to_execute="FiveWaypointsTree">
+  <BehaviorTree ID="FiveWaypointsTree">
+    <Sequence>
+      <!-- 依次导航到前四个目标点 -->
+      <SendGoal name="Point_1" goal_pose="5.17;-0.7;0; 0;0;0;1" action_name="navigate_to_pose"/>
+      <SendGoal name="Point_2" goal_pose="6.03;-2.41;0; 0;0;0;1" action_name="navigate_to_pose"/>
+      <SendGoal name="Point_3" goal_pose="4.60;-4.36;0; 0;0;0;1" action_name="navigate_to_pose"/>
+      <SendGoal name="Point_4" goal_pose="1.57;-5.07;0; 0;0;0;1" action_name="navigate_to_pose"/>
+      
+      <!-- 到达第五个点后，通过 KeepRunningUntilFailure 保持在该节点，防止行为树重新从头开始 -->
+      <KeepRunningUntilFailure>
+        <Sequence>
+          <!-- 持续向第五个点发送目标，确保机器人驻留在此处 -->
+          <SendGoal name="Point_5" goal_pose="0.2;-2.2;0; 0;0;0;1" action_name="navigate_to_pose"/>
+          <!-- 休眠 1000 毫秒 (1秒) 以让出线程资源，避免同一 tick 内陷入无限死循环崩溃 -->
+          <Sleep msec="1000"/>
+        </Sequence>
+      </KeepRunningUntilFailure>
+    </Sequence>
   </BehaviorTree>
 
-  <!-- Description of Node Models (used by Groot) -->
+  <!-- Groot2 的节点模型描述，用于在图形化编辑器中正确显示自定义节点 -->
   <TreeNodesModel>
-    <Decorator ID="RateController">
-      <input_port name="hz">Rate</input_port>
-    </Decorator>
-    <Action ID="SendGoal"
-            editable="true">
-      <input_port name="goal_pose"
-                  default="0;0;0; 0;0;0;1"/>
-      <input_port name="action_name"
-                  default="navigate_to_pose"/>
+    <Action ID="SendGoal" editable="true">
+      <input_port name="goal_pose" default="0;0;0; 0;0;0;1"/>
+      <input_port name="action_name" default="navigate_to_pose"/>
     </Action>
   </TreeNodesModel>
-
 </root>
+
+    

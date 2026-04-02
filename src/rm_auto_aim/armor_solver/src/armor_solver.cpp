@@ -36,11 +36,25 @@ Solver::Solver(std::weak_ptr<rclcpp::Node> n) : node_(n) {
   prediction_delay_ = node->declare_parameter("solver.prediction_delay", 0.0);
   // 控制延时
   controller_delay_ = node->declare_parameter("solver.controller_delay", 0.0);
-  // 跳转到下一装甲板的角度阈值
-  side_angle_ = node->declare_parameter("solver.side_angle", 15.0);
-
-  // 最小的切换角速度阈值（！！！）
+  // 侧装甲相对于中心的角度（单位：度，保留参数声明）
+  node->declare_parameter("solver.side_angle", 15.0);
+  // Coming/Leaving 非对称角度（单位：度）
+  coming_angle_ = node->declare_parameter("solver.coming_angle", 55.0);
+  leaving_angle_ = node->declare_parameter("solver.leaving_angle", 20.0);
+  // 最小的切换角速度阈值
   min_switching_v_yaw_ = node->declare_parameter("solver.min_switching_v_yaw", 1.0);
+
+  // 开火容差参数
+  // fire_margin_: 投影宽度缩放因子（0.8 = 偏保守，减少打边缘概率）
+  fire_margin_ = node->declare_parameter("solver.fire_margin", 0.8);
+  double min_tol_deg = node->declare_parameter("solver.min_fire_tolerance", 1.5);
+  double max_tol_deg = node->declare_parameter("solver.max_fire_tolerance", 4.0);
+  min_fire_tolerance_rad_ = min_tol_deg * M_PI / 180.0;
+  max_fire_tolerance_rad_ = max_tol_deg * M_PI / 180.0;
+
+  // 瞄准偏移量（与 launch rpy 解耦）
+  yaw_offset_   = node->declare_parameter("solver.yaw_offset",   0.0);
+  pitch_offset_ = node->declare_parameter("solver.pitch_offset", 0.0);
 
   // 补偿器类型
   std::string compenstator_type = node->declare_parameter("solver.compensator_type", "ideal");
@@ -59,11 +73,19 @@ Solver::Solver(std::weak_ptr<rclcpp::Node> n) : node_(n) {
   manual_compensator_ = std::make_unique<ManualCompensator>();
   // 初始化参数angle_offset
   auto angle_offset = node->declare_parameter("solver.angle_offset", std::vector<std::string>{});
-  if(!manual_compensator_->updateMapFlow(angle_offset)) 
-  {
-    // 打印手动补偿器更新失败
+  if (!manual_compensator_->updateMapFlow(angle_offset)) {
     PKA_WARN("armor_solver", "Manual compensator update failed!");
   }
+
+  // -------------------------------------------------------
+  // center_mode 参数（yaml 键名与变量名对齐）
+  // center_mode: 是否启用瞄准中心模式（bool）
+  // center_dis:  距离上限，超出该值不开火（单位 m）
+  // center_yaw:  云台与目标 yaw 误差上限，超出该值不开火（单位 rad）
+  // -------------------------------------------------------
+  center_mode_ = node->declare_parameter("solver.center_mode", false);
+  center_dis_  = node->declare_parameter("solver.center_dis",  5.3);
+  center_yaw_  = node->declare_parameter("solver.center_yaw",  0.135);
 
   // 初始化状态为跟踪装甲板
   state = State::TRACKING_ARMOR;
@@ -78,37 +100,41 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
                                             std::shared_ptr<tf2_ros::Buffer> tf2_buffer_) {
   // Get newest parameters
   // 获得最新的参数
-  try 
-  {
+  try {
     auto node = node_.lock();
-    max_tracking_v_yaw_ = node->get_parameter("solver.max_tracking_v_yaw").as_double();
-    prediction_delay_ = node->get_parameter("solver.prediction_delay").as_double();
-    controller_delay_ = node->get_parameter("solver.controller_delay").as_double();
-    side_angle_ = node->get_parameter("solver.side_angle").as_double();
+    max_tracking_v_yaw_  = node->get_parameter("solver.max_tracking_v_yaw").as_double();
+    prediction_delay_    = node->get_parameter("solver.prediction_delay").as_double();
+    controller_delay_    = node->get_parameter("solver.controller_delay").as_double();
+    coming_angle_        = node->get_parameter("solver.coming_angle").as_double();
+    leaving_angle_       = node->get_parameter("solver.leaving_angle").as_double();
     min_switching_v_yaw_ = node->get_parameter("solver.min_switching_v_yaw").as_double();
-    // 重置智能指针，释放资源
+    fire_margin_         = node->get_parameter("solver.fire_margin").as_double();
+    yaw_offset_          = node->get_parameter("solver.yaw_offset").as_double();
+    pitch_offset_        = node->get_parameter("solver.pitch_offset").as_double();
+    // center_mode 三个参数支持 ros2 param set 运行时动态生效
+    center_mode_ = node->get_parameter("solver.center_mode").as_bool();
+    center_dis_  = node->get_parameter("solver.center_dis").as_double();
+    center_yaw_  = node->get_parameter("solver.center_yaw").as_double();
     node.reset();
-  } catch (const std::runtime_error &e) 
-  {
+  } catch (const std::runtime_error &e) {
     PKA_ERROR("armor_solver", "{}", e.what());
   }
 
+  // 解析当前跟踪目标的兵种类型，用于后续装甲板大小查询
+  // target.id 字段由 armor_solver_node 从 tracker_->tracked_id 填入
+  const RobotType robot_type = robotTypeFromId(target.id);
+
   // Get current roll, yaw and pitch of gimbal
   // 获得云台最近的roll、yaw和pitch
-  try 
-  {
-    // 得到从gimbal_link到target的转换关系
+  try {
     auto gimbal_tf = tf2_buffer_->lookupTransform(target.header.frame_id, "gimbal_link", tf2::TimePointZero);
     auto msg_q = gimbal_tf.transform.rotation;
 
     tf2::Quaternion tf_q;
     tf2::fromMsg(msg_q, tf_q);
-    // 
     tf2::Matrix3x3(tf_q).getRPY(rpy_[0], rpy_[1], rpy_[2]);
     rpy_[1] = -rpy_[1];
-  } 
-  catch (tf2::TransformException &ex) 
-  {
+  } catch (tf2::TransformException &ex) {
     PKA_ERROR("armor_solver", "{}", ex.what());
     throw ex;
   }
@@ -120,7 +146,7 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
   // 计算飞行时间
   double flying_time = trajectory_compensator_->getFlyingTime(target_position);
 
-  double dt =(current_time - rclcpp::Time(target.header.stamp)).seconds() + flying_time + prediction_delay_;
+  double dt = (current_time - rclcpp::Time(target.header.stamp)).seconds() + flying_time + prediction_delay_;
   target_position.x() += dt * target.velocity.x;
   target_position.y() += dt * target.velocity.y;
   target_position.z() += dt * target.velocity.z;
@@ -130,13 +156,75 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
   // 选择最好的装甲板击打
   std::vector<Eigen::Vector3d> armor_positions = getArmorPositions(
     target_position, target_yaw, target.radius_1, target.radius_2, target.d_zc, target.d_za, target.armors_num);
-  int idx =
-    selectBestArmor(armor_positions, target_position, target_yaw, target.v_yaw, target.armors_num);
-  auto chosen_armor_position = armor_positions.at(idx);
-  if (chosen_armor_position.norm() < 0.1) 
-  {
+
+  double selected_delta_angle = 0.0;
+  int idx = selectBestArmor(
+    armor_positions, target_position, target_yaw, target.v_yaw, target.armors_num, selected_delta_angle);
+  Eigen::Vector3d front_armor_pos = armor_positions.at(idx);
+
+  if (front_armor_pos.norm() < 0.1) {
     throw std::runtime_error("No valid armor to shoot");
   }
+
+  // -------------------------------------------------------
+  // center_mode：瞄准机器人整车中心，旋转陀螺时使用
+  // -------------------------------------------------------
+  if (center_mode_ && target.v_yaw >= 4.1) {
+    // 应用 controller_delay 补偿后的位置用于解算指向角
+    if (controller_delay_ != 0) {
+      target_position.x() += controller_delay_ * target.velocity.x;
+      target_position.y() += controller_delay_ * target.velocity.y;
+      target_position.z() += controller_delay_ * target.velocity.z;
+      double target_yaw_delayed = target_yaw + controller_delay_ * target.v_yaw;
+      armor_positions = getArmorPositions(
+        target_position, target_yaw_delayed,
+        target.radius_1, target.radius_2,
+        target.d_zc, target.d_za,
+        target.armors_num);
+      front_armor_pos = armor_positions.at(idx);
+      target_yaw = target_yaw_delayed;
+    }
+
+    // 解算指向整车中心的 yaw/pitch
+    double center_yaw_cmd, center_pitch_cmd;
+    calcYawAndPitch(target_position, rpy_, center_yaw_cmd, center_pitch_cmd);
+
+    // 手动补偿
+    auto angle_offset_val = manual_compensator_->angleHardCorrect(
+      target_position.head(2).norm(), target_position.z());
+    double pitch_offset_val = angle_offset_val[0] * M_PI / 180.0;
+    double yaw_offset_val   = angle_offset_val[1] * M_PI / 180.0;
+
+    // 叠加 yaw_offset_ / pitch_offset_（与外参解耦的机械偏差补偿）
+    double cmd_pitch = center_pitch_cmd + pitch_offset_val + pitch_offset_ * M_PI / 180.0;
+    double cmd_yaw   = angles::normalize_angle(center_yaw_cmd + yaw_offset_val + yaw_offset_ * M_PI / 180.0);
+
+    rm_interfaces::msg::GimbalCmd gimbal_cmd;
+    gimbal_cmd.header     = target.header;
+    gimbal_cmd.distance   = target_position.norm();
+    gimbal_cmd.yaw        = cmd_yaw   * 180.0 / M_PI;
+    gimbal_cmd.pitch      = cmd_pitch * 180.0 / M_PI;
+    gimbal_cmd.yaw_diff   = (cmd_yaw   - rpy_[2]) * 180.0 / M_PI;
+    gimbal_cmd.pitch_diff = (cmd_pitch - rpy_[1]) * 180.0 / M_PI;
+
+    // 开火判断：yaw 误差在 center_yaw_ 以内 且 距离不超过 center_dis_
+    double predicted_target_yaw = target.yaw + dt * target.v_yaw;
+    if (controller_delay_ != 0) {
+      predicted_target_yaw += controller_delay_ * target.v_yaw;
+    }
+    double dis = target_position.norm();
+    bool in_yaw_range = std::abs(angles::normalize_angle(rpy_[2] - predicted_target_yaw)) <= center_yaw_;
+    bool in_dis_range = (dis < center_dis_);
+    gimbal_cmd.fire_advice = in_yaw_range && in_dis_range;
+
+    return gimbal_cmd;
+  }
+
+  // -------------------------------------------------------
+  // 正常模式（TRACKING_ARMOR / TRACKING_CENTER 状态机）
+  // -------------------------------------------------------
+
+  auto chosen_armor_position = front_armor_pos;
 
   // Calculate yaw, pitch, distance
   // 计算yaw，pitch和distance
@@ -147,34 +235,34 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
   // Initialize gimbal_cmd
   // 初始化云台指令
   rm_interfaces::msg::GimbalCmd gimbal_cmd;
-  gimbal_cmd.header = target.header;
+  gimbal_cmd.header   = target.header;
   gimbal_cmd.distance = distance;
-  gimbal_cmd.fire_advice = isOnTarget(rpy_[2], rpy_[1], yaw, pitch, distance);
+  // 使用基于兵种装甲板实际宽度的自适应开火判断
+  gimbal_cmd.fire_advice = isOnTarget(
+    rpy_[2], rpy_[1], yaw, pitch, distance, robot_type, selected_delta_angle);
 
-  switch (state) 
-  {
-    case TRACKING_ARMOR: 
-    {
-      // 如果目标转速大于阈值转速超过五次，云台不跟随
-      if (std::abs(target.v_yaw) > max_tracking_v_yaw_) 
-      {
+  // 如果目标角速度超过最大跟踪角速度，建议开火
+  if (std::abs(target.v_yaw) > max_tracking_v_yaw_) {
+    gimbal_cmd.fire_advice = true;
+  }
+
+  switch (state) {
+    // 如果为跟踪装甲板模式
+    case TRACKING_ARMOR: {
+      // 如果目标转速大于阈值转速超过五次，切换到跟踪中心
+      if (std::abs(target.v_yaw) > max_tracking_v_yaw_) {
         overflow_count_++;
-      } 
-      else 
-      {
+      } else {
         overflow_count_ = 0;
       }
 
-      if (overflow_count_ > transfer_thresh_) 
-      {
+      if (overflow_count_ > transfer_thresh_) {
         state = TRACKING_CENTER;
       }
 
-      // If isOnTarget() never returns true, adjust controller_delay to force the gimbal to   move
-      if (controller_delay_ != 0) 
-      {
+      if (controller_delay_ != 0) {
         target_position.x() += controller_delay_ * target.velocity.x;
-        target_position.y() += controller_delay_ * target.velocity.y;  
+        target_position.y() += controller_delay_ * target.velocity.y;
         target_position.z() += controller_delay_ * target.velocity.z;
         target_yaw += controller_delay_ * target.v_yaw;
         armor_positions = getArmorPositions(target_position,
@@ -193,50 +281,45 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
       }
       break;
     }
-    // 如果为瞄准中心模式
-    case TRACKING_CENTER: 
-    {
-      // 如果目标转速小于阈值转速超过五次
-      if (std::abs(target.v_yaw) < max_tracking_v_yaw_) 
-      {
+    // 如果为瞄准中心模式（内部状态机版本，由 max_tracking_v_yaw 触发）
+    case TRACKING_CENTER: {
+      if (std::abs(target.v_yaw) < max_tracking_v_yaw_) {
         overflow_count_++;
-      } 
-      else 
-      {
+      } else {
         overflow_count_ = 0;
       }
 
-      if (overflow_count_ > transfer_thresh_) 
-      {
+      if (overflow_count_ > transfer_thresh_) {
         state = TRACKING_ARMOR;
         overflow_count_ = 0;
       }
-      // 因为为瞄准中心所以一直为开火状态
+      // 瞄准中心时持续开火
       gimbal_cmd.fire_advice = true;
+      // 补充缺失的瞄准中心解算，否则 yaw/pitch 停留在上一帧装甲板位置
       calcYawAndPitch(target_position, rpy_, yaw, pitch);
+      gimbal_cmd.distance = target_position.norm();
       break;
     }
   }
 
-  // Compensate angle by angle_offset_map
-  // 按angle_offset_map补偿角度
-  // target_position.head(2).norm() = sqrt(pow(target_position.x,2)+pow(target_position.y,2));
-  auto angle_offset = manual_compensator_->angleHardCorrect(target_position.head(2).norm(), target_position.z());
-  double pitch_offset = angle_offset[0] * M_PI / 180;
-  double yaw_offset = angle_offset[1] * M_PI / 180;
-  double cmd_pitch = pitch + pitch_offset;
-  double cmd_yaw = angles::normalize_angle(yaw + yaw_offset);
+  // Compensate angle by angle_offset_map（距离分段手动补偿）
+  auto angle_offset = manual_compensator_->angleHardCorrect(
+    target_position.head(2).norm(), target_position.z());
+  double pitch_offset_val = angle_offset[0] * M_PI / 180.0;
+  double yaw_offset_val   = angle_offset[1] * M_PI / 180.0;
 
+  // 叠加 yaw_offset_ / pitch_offset_（与外参解耦的机械偏差补偿）
+  double cmd_pitch = pitch + pitch_offset_val + pitch_offset_ * M_PI / 180.0;
+  double cmd_yaw   = angles::normalize_angle(yaw + yaw_offset_val + yaw_offset_ * M_PI / 180.0);
 
-  gimbal_cmd.yaw = cmd_yaw * 180 / M_PI;
-  gimbal_cmd.pitch = cmd_pitch * 180 / M_PI;  
-  gimbal_cmd.yaw_diff = (cmd_yaw - rpy_[2]) * 180 / M_PI;
-  gimbal_cmd.pitch_diff = (cmd_pitch - rpy_[1]) * 180 / M_PI;
+  gimbal_cmd.yaw        = cmd_yaw   * 180.0 / M_PI;
+  gimbal_cmd.pitch      = cmd_pitch * 180.0 / M_PI;
+  gimbal_cmd.yaw_diff   = (cmd_yaw   - rpy_[2]) * 180.0 / M_PI;
+  gimbal_cmd.pitch_diff = (cmd_pitch - rpy_[1]) * 180.0 / M_PI;
 
-  // if (gimbal_cmd.fire_advice) 
-  // {
-  //   PKA_DEBUG("armor_solver", "You Need Fire!");
-  // }
+  if (gimbal_cmd.fire_advice) {
+    PKA_DEBUG("armor_solver", "Fire!");
+  }
   return gimbal_cmd;
 }
 
@@ -244,20 +327,42 @@ bool Solver::isOnTarget(const double cur_yaw,
                         const double cur_pitch,
                         const double target_yaw,
                         const double target_pitch,
-                        const double distance) const noexcept {
-  // Judge whether to shoot
-  double shooting_range_yaw = std::abs(atan2(shooting_range_w_ / 2, distance));
-  double shooting_range_pitch = std::abs(atan2(shooting_range_h_ / 2, distance));
-  // Limit the shooting area to 1 degree to avoid not shooting when distance is
-  // too large
-  shooting_range_yaw = std::max(shooting_range_yaw, 1.0 * M_PI / 180);
-  shooting_range_pitch = std::max(shooting_range_pitch, 1.0 * M_PI / 180);
-  if (std::abs(cur_yaw - target_yaw) < shooting_range_yaw &&
-      std::abs(cur_pitch - target_pitch) < shooting_range_pitch) {
-    return true;
-  }
+                        const double distance,
+                        const RobotType robot_type,
+                        const double armor_delta_angle) const noexcept {
+  // -------------------------------------------------------
+  // 装甲板宽度查表：根据兵种枚举决定使用大/小装甲板半宽
+  //
+  //   大装甲板：英雄(HERO_1)、基地(BASE)
+  //   小装甲板：工程(ENGINEER_2)、步兵(INFANTRY_3/4)、
+  //             哨兵(SENTRY_5)、前哨站(OUTPOST)
+  //
+  // 使用 isLargeArmor() 工具函数，与 tracker 保持一致的判断逻辑
+  // -------------------------------------------------------
+  double armor_half_w = isLargeArmor(robot_type) ? LARGE_ARMOR_HALF_W : SMALL_ARMOR_HALF_W;
 
-  return false;
+  // 根据装甲板与相机视线的夹角计算投影宽度
+  // armor_delta_angle 越大（装甲板越侧对），投影宽度越小，容差越小
+  double cos_incidence    = std::abs(std::cos(armor_delta_angle));
+  double projected_half_w = armor_half_w * cos_incidence;
+
+  // 角度容差 = atan(投影半宽 / 距离) × 缩放因子
+  // fire_margin_ < 1：保守（只有对准装甲板中心才开火）
+  // fire_margin_ > 1：宽松（瞄偏一点也开火）
+  double tolerance_rad = std::atan2(projected_half_w, distance) * fire_margin_;
+
+  // 钳制到 [min_fire_tolerance_rad_, max_fire_tolerance_rad_]
+  // 防止近距离容差过大、远距离容差退化为零
+  tolerance_rad = std::clamp(tolerance_rad, min_fire_tolerance_rad_, max_fire_tolerance_rad_);
+
+  // 采用最短角进行相减，避免角度周期性导致的误判
+  bool on_target = std::abs(angles::shortest_angular_distance(cur_yaw, target_yaw)) < tolerance_rad;
+
+  // 连续两帧在目标内才开火（稳定性滤波）
+  bool stable      = on_target && last_on_target_;
+  last_on_target_  = on_target;
+
+  return stable;
 }
 
 std::vector<Eigen::Vector3d> Solver::getArmorPositions(const Eigen::Vector3d &target_center,
@@ -268,21 +373,15 @@ std::vector<Eigen::Vector3d> Solver::getArmorPositions(const Eigen::Vector3d &ta
                                                        const double d_za,
                                                        const size_t armors_num) const noexcept {
   auto armor_positions = std::vector<Eigen::Vector3d>(armors_num, Eigen::Vector3d::Zero());
-  // Calculate the position of each armor
-  // 计算每一个装甲板那的位置
   bool is_current_pair = true;
   double r = 0., target_dz = 0.;
-  for (size_t i = 0; i < armors_num; i++) 
-  {
+  for (size_t i = 0; i < armors_num; i++) {
     double temp_yaw = target_yaw + i * (2 * M_PI / armors_num);
-    if (armors_num == 4) 
-    {
+    if (armors_num == 4) {
       r = is_current_pair ? r1 : r2;
       target_dz = d_zc + (is_current_pair ? 0 : d_za);
       is_current_pair = !is_current_pair;
-    } 
-    else 
-    {
+    } else {
       r = r1;
       target_dz = d_zc;
     }
@@ -292,51 +391,86 @@ std::vector<Eigen::Vector3d> Solver::getArmorPositions(const Eigen::Vector3d &ta
   return armor_positions;
 }
 
-// 选择最好的装甲板进行击打
 int Solver::selectBestArmor(const std::vector<Eigen::Vector3d> &armor_positions,
                             const Eigen::Vector3d &target_center,
                             const double target_yaw,
                             const double target_v_yaw,
-                            const size_t armors_num) const noexcept {
+                            const size_t armors_num,
+                            double &selected_delta_angle) noexcept {
   // Angle between the car's center and the X-axis
-  // 机器人中心与x轴之间的角度
   double alpha = std::atan2(target_center.y(), target_center.x());
-  // Angle between the front of observed armor and the X-axis
-  // 观察到的装甲板前部与x轴之间的角度
-  double beta = target_yaw;
 
-  // clang-format off
-  // 2x2的矩阵
-  Eigen::Matrix2d R_odom2center;
-  Eigen::Matrix2d R_odom2armor;
-  R_odom2center << std::cos(alpha), std::sin(alpha), 
-                  -std::sin(alpha), std::cos(alpha);
-  R_odom2armor << std::cos(beta), std::sin(beta), 
-                 -std::sin(beta), std::cos(beta);
-  // clang-format on
-  Eigen::Matrix2d R_center2armor = R_odom2center.transpose() * R_odom2armor;
-
-  // Equal to (alpha - beta) in most cases
-  // 大多数情况下等于alpha-beta
-  double decision_angle = -std::asin(R_center2armor(0, 1));
-
-  // Angle thresh of the armor jump
-  double theta = (target_v_yaw > 0 ? side_angle_ : -side_angle_) / 180.0 * M_PI;
-
-  // Avoid the frequent switch between two armor
-  // 避免在两块装甲之间频繁切换
-  if (std::abs(target_v_yaw) < min_switching_v_yaw_) 
-  {
-    theta = 0;
+  // Compute delta_angle for each armor relative to camera-center line
+  std::vector<double> delta_angles(armors_num);
+  for (size_t i = 0; i < armors_num; i++) {
+    double armor_yaw = target_yaw + i * (2 * M_PI / armors_num);
+    double delta = armor_yaw - alpha;
+    // Normalize to [-pi, pi]
+    while (delta > M_PI) delta -= 2 * M_PI;
+    while (delta < -M_PI) delta += 2 * M_PI;
+    delta_angles[i] = delta;
   }
 
-  double temp_angle = decision_angle + M_PI / armors_num - theta;
+  int selected_id = 0;
 
-  if (temp_angle < 0) {
-    temp_angle += 2 * M_PI;
+  if (std::abs(target_v_yaw) < min_switching_v_yaw_) {
+    // Low speed: select armor with smallest |delta_angle|
+    double min_abs_delta = std::abs(delta_angles[0]);
+    for (size_t i = 1; i < armors_num; i++) {
+      double abs_delta = std::abs(delta_angles[i]);
+      if (abs_delta < min_abs_delta) {
+        min_abs_delta = abs_delta;
+        selected_id = static_cast<int>(i);
+      }
+    }
+    // Lock mechanism: if the previous selection is still within 60°, keep it
+    if (lock_id_ >= 0 && lock_id_ < static_cast<int>(armors_num)) {
+      double lock_delta = std::abs(delta_angles[lock_id_]);
+      if (lock_delta < M_PI / 3 && std::abs(lock_delta - min_abs_delta) < M_PI / 6) {
+        selected_id = lock_id_;
+      }
+    }
+  } else {
+    // High speed spinning: use asymmetric coming/leaving angles
+    // coming_angle_: 向"迎面转来"方向多看（提前锁定）
+    // leaving_angle_: 向"转走"方向少看（快速放弃，切换下一块）
+    double coming_rad  = coming_angle_  / 180.0 * M_PI;
+    double leaving_rad = leaving_angle_ / 180.0 * M_PI;
+
+    double best_score = 1e9;
+    for (size_t i = 0; i < armors_num; i++) {
+      double delta = delta_angles[i];
+      bool in_coming_zone;
+      if (target_v_yaw < 0) {
+        in_coming_zone = (delta > -leaving_rad && delta < coming_rad);
+      } else {
+        in_coming_zone = (delta > -coming_rad && delta < leaving_rad);
+      }
+
+      if (in_coming_zone) {
+        double score = std::abs(delta);
+        if (score < best_score) {
+          best_score  = score;
+          selected_id = static_cast<int>(i);
+        }
+      }
+    }
+
+    // Fallback: if no armor in coming zone, pick closest
+    if (best_score >= 1e9) {
+      double min_abs_delta = 1e9;
+      for (size_t i = 0; i < armors_num; i++) {
+        double abs_delta = std::abs(delta_angles[i]);
+        if (abs_delta < min_abs_delta) {
+          min_abs_delta = abs_delta;
+          selected_id   = static_cast<int>(i);
+        }
+      }
+    }
   }
 
-  int selected_id = static_cast<int>(temp_angle / (2 * M_PI / armors_num));
+  lock_id_             = selected_id;
+  selected_delta_angle = delta_angles[selected_id];
   return selected_id;
 }
 
@@ -344,24 +478,20 @@ void Solver::calcYawAndPitch(const Eigen::Vector3d &p,
                              const std::array<double, 3> rpy,
                              double &yaw,
                              double &pitch) const noexcept {
-  // Calculate yaw and pitch
-  yaw = atan2(p.y(), p.x());
+  yaw   = atan2(p.y(), p.x());
   pitch = atan2(p.z(), p.head(2).norm());
 
-  if (double temp_pitch = pitch; trajectory_compensator_->compensate(p, temp_pitch)) 
-  {
-    // 进行角度的迭代
+  if (double temp_pitch = pitch; trajectory_compensator_->compensate(p, temp_pitch)) {
     pitch = temp_pitch;
   }
 }
 
 std::vector<std::pair<double, double>> Solver::getTrajectory() const noexcept {
   auto trajectory = trajectory_compensator_->getTrajectory(15, rpy_[1]);
-  // Rotate
   for (auto &p : trajectory) {
     double x = p.first;
     double y = p.second;
-    p.first = x * cos(rpy_[1]) + y * sin(rpy_[1]);
+    p.first  = x * cos(rpy_[1]) + y * sin(rpy_[1]);
     p.second = -x * sin(rpy_[1]) + y * cos(rpy_[1]);
   }
   return trajectory;

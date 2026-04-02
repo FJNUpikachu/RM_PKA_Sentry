@@ -77,6 +77,8 @@ int main(int argc, char ** argv)
     "is_status_best",
     "is_status_middle",
     "is_status_bad",
+    "is_arrived",    // ★ 新增：检查是否已到达终点
+    "mark_arrived",  // ★ 新增：将到达标志写入黑板
   };
   // clang-format on
 

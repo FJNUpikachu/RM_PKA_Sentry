@@ -1,5 +1,6 @@
 #include "rm_behavior_tree/plugins/condition/is_status_bad.hpp"
 #include <rm_interfaces/msg/detail/robot_status__struct.hpp>
+#include<iostream>
 
 namespace rm_behavior_tree
 {
@@ -19,6 +20,7 @@ BT::NodeStatus IsStatusBadAction::checkRobotStatus()
 
   // 修改逻辑：current_hp > 0 且 <= 200 时返回成功，否则失败
   if (msg->current_hp > 0 && msg->current_hp <= 200) {
+    std::cout<<"Status:Bad HP:"<<(msg->current_hp)<<std::endl;
     return BT::NodeStatus::SUCCESS;
   } else {
     return BT::NodeStatus::FAILURE;

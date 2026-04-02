@@ -6,6 +6,8 @@
 #include "rm_interfaces/msg/gimbal_cmd.hpp"
 #include <geometry_msgs/msg/twist.hpp>
 
+#include <atomic>
+#include <thread>
 #include <string>
 
 namespace pka {
@@ -30,11 +32,25 @@ public:
   static void virtual_send_timer_cb(UARTNode * node);      // mode=2
   static void health_timer_cb(UARTNode * node);            // mode=1,2
 
-  // ── 串口发送辅助 ──────────────────────────────────────────────────────────
-  // 将 rm_interfaces::msg::SerialSendData 打包写入串口
-  // 按 example 方式：size_t bytes_wrote = serial_->write(packed_string)
-  static void do_send(UARTNode * node,
-                      const rm_interfaces::msg::SerialSendData & data);
+  // ── 串口发送辅助（内部按 robot_type_ 分派） ──────────────────────────────
+  static void do_send_sentry(
+    UARTNode * node,
+    const rm_interfaces::msg::SentrySerialSendData & data);
+
+  static void do_send_infantry(
+    UARTNode * node,
+    const rm_interfaces::msg::InfantrySerialSendData & data);
+
+  // ── 裁判系统消息发布辅助（仅哨兵） ───────────────────────────────────────
+  static void publish_judge_msgs(
+    UARTNode * node,
+    const rm_interfaces::msg::SentrySerialReceiveData & recv_msg);
+
+  // ── SetMode 服务通知辅助 ──────────────────────────────────────────────────
+  // 当串口包中的 mode 与上次不同时调用，异步发起服务请求，不阻塞接收线程
+  // mode 含义与 SetMode.srv / VisionMode 枚举一致：
+  //   0 = AUTO_AIM_RED   1 = AUTO_AIM_BLUE
+  static void notify_set_mode(UARTNode * node, uint8_t mode);
 
   // ── 串口重启 ──────────────────────────────────────────────────────────────
   static bool restart_serial(UARTNode * node);

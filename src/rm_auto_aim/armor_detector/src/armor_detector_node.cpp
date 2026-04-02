@@ -57,7 +57,6 @@
 namespace pka::auto_aim {
 ArmorDetectorNode::ArmorDetectorNode(const rclcpp::NodeOptions &options)
     : Node("armor_detector", options) {
-  PKA_REGISTER_LOGGER("armor_detector", "~/fyt2024-log", INFO);
   PKA_INFO("armor_detector", "Starting ArmorDetectorNode!");
   // Detector
   detector_ = initDetector();
@@ -151,13 +150,6 @@ ArmorDetectorNode::ArmorDetectorNode(const rclcpp::NodeOptions &options)
       std::bind(&ArmorDetectorNode::imageCallback, this,
                 std::placeholders::_1));
 
-  // 目标帧发布者 
-  // target_sub_ = this->create_subscription<rm_interfaces::msg::Target>(
-  //   "armor_solver/target",
-  //   rclcpp::SensorDataQoS(),
-  //   std::bind(&ArmorDetectorNode::targetCallback, this,
-  //   std::placeholders::_1));
-
   tf2_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
   // 传递当前节点的基础接口和定时器接口来初始化定时器创建和管理
   auto timer_interface = std::make_shared<tf2_ros::CreateTimerROS>(
@@ -222,11 +214,6 @@ void ArmorDetectorNode::imageCallback(
   if (armor_pose_estimator_ != nullptr) {
     armors_msg_.armors =
         armor_pose_estimator_->extractArmorPoses(armors, imu_to_camera_);
-
-    // std::string path =
-    //   fmt::format("/home/zcf/fyt2024-log/images/{}/{}.jpg",
-    //   armor_msg.number, now().seconds());
-    // cv::imwrite(path, armor.number_img);
   } else {
     PKA_WARN("armor_detector", "PnP Failed!");
   }
@@ -286,8 +273,19 @@ std::unique_ptr<Detector> ArmorDetectorNode::initDetector()
           declare_parameter("armor.max_large_center_distance", 5.0),
       .max_angle = declare_parameter("armor.max_angle", 35.0)};
 
-  // 创建Detector类
-  auto detector = std::make_unique<Detector>(binary_thres, EnemyColor::RED, l_params, a_params);
+  // ── 初始识别颜色从参数读取 ────────────────────────────────────────────────
+  // detect_color: 0=RED(default)  1=BLUE
+  // 与 VisionMode / SetMode.srv 中 0=自瞄红 1=自瞄蓝 保持一致
+  int detect_color_param = declare_parameter("detect_color", 0);
+  EnemyColor initial_color = (detect_color_param == 1)
+      ? EnemyColor::BLUE
+      : EnemyColor::RED;
+  PKA_INFO("armor_detector",
+    "Initial detect_color={} ({})",
+    detect_color_param, initial_color == EnemyColor::RED ? "RED" : "BLUE");
+
+  // 创建Detector类（使用从参数读取的初始颜色，不再硬编码 RED）
+  auto detector = std::make_unique<Detector>(binary_thres, initial_color, l_params, a_params);
 
   // 初始化分类器
   // Init classifier
@@ -346,8 +344,6 @@ std::vector<Armor> ArmorDetectorNode::detectArmors(
   // 发布调试信息
   if (debug_) 
   {
-    //"mono8"：指定图像的编码格式。"mono8" 表示 8 位单通道图像，通常用于灰度图像。
-    // CvImage函数用于将cv::Mat转换成ROS图像消息  
     binary_img_pub_.publish(
         cv_bridge::CvImage(img_msg->header, "mono8", detector_->binary_img)
             .toImageMsg());
@@ -385,11 +381,9 @@ std::vector<Armor> ArmorDetectorNode::detectArmors(
     cv::circle(img, cam_center_, 5, cv::Scalar(255, 0, 0), 2);
     // Draw latency
     // 绘制延迟
-    // std::stringstream用于字符串的输入和输出
     std::stringstream latency_ss;
     latency_ss << "Latency: " << std::fixed << std::setprecision(2) << latency << "ms";
     auto latency_s = latency_ss.str();
-    // 绘制延迟
     cv::putText(img, latency_s, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 255, 0), 2);
     result_img_pub_.publish(cv_bridge::CvImage(img_msg->header, "rgb8", img).toImageMsg());
   }
@@ -458,18 +452,6 @@ ArmorDetectorNode::onSetParameters(std::vector<rclcpp::Parameter> parameters)
   return result;
 }
 
-// void ArmorDetectorNode::targetCallback(const
-// rm_interfaces::msg::Target::SharedPtr target_msg) {
-//   if (target_msg->tracking) {
-//     tracked_target_ = target_msg;
-//   } else {
-//     tracked_target_ = nullptr;
-//     if (!tracked_armors_.empty()) {
-//       tracked_armors_.clear();
-//     }
-//   }
-// }
-
 // 创建调试发布者
 void ArmorDetectorNode::createDebugPublishers() noexcept 
 {
@@ -501,7 +483,6 @@ void ArmorDetectorNode::destroyDebugPublishers() noexcept
   result_img_pub_.shutdown();
 }
 
-// 
 void ArmorDetectorNode::publishMarkers() noexcept 
 {
   using Marker = visualization_msgs::msg::Marker;
@@ -520,10 +501,12 @@ void ArmorDetectorNode::setModeCallback(
   VisionMode mode = static_cast<VisionMode>(request->mode);
   // 将自瞄模式名称转换成字符串
   std::string mode_name = visionModeToString(mode);
-  //如果为“UNKNOWN”
+  //如果为"UNKNOWN"
   if (mode_name == "UNKNOWN") 
   {
     PKA_ERROR("armor_detector", "Invalid mode: {}", request->mode);
+    response->success = false;
+    response->message = "Invalid mode";
     return;
   }
 
@@ -567,8 +550,4 @@ void ArmorDetectorNode::setModeCallback(
 } // namespace pka::auto_aim
 
 #include "rclcpp_components/register_node_macro.hpp"
-
-// Register the component with class_loader.
-// This acts as a sort of entry point, allowing the component to be discoverable
-// when its library is being loaded into a running process.
 RCLCPP_COMPONENTS_REGISTER_NODE(pka::auto_aim::ArmorDetectorNode)

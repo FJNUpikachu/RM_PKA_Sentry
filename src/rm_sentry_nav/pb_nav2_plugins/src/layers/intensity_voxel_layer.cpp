@@ -1,8 +1,21 @@
 // Copyright 2025 Lihan Chen
-// ... (License Header) ...
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "pb_nav2_plugins/layers/intensity_voxel_layer.hpp"
+
 #include <vector>
+
 #include "sensor_msgs/point_cloud2_iterator.hpp"
 
 #define VOXEL_BITS 16
@@ -10,6 +23,7 @@
 using nav2_costmap_2d::FREE_SPACE;
 using nav2_costmap_2d::LETHAL_OBSTACLE;
 using nav2_costmap_2d::NO_INFORMATION;
+
 using nav2_costmap_2d::Observation;
 using nav2_costmap_2d::ObservationBuffer;
 
@@ -21,19 +35,17 @@ void IntensityVoxelLayer::onInitialize()
   auto node = node_.lock();
   clock_ = node->get_clock();
   ObstacleLayer::onInitialize();
-
   footprint_clearing_enabled_ =
     node->get_parameter(name_ + ".footprint_clearing_enabled").as_bool();
   enabled_ = node->get_parameter(name_ + ".enabled").as_bool();
   max_obstacle_height_ = node->get_parameter(name_ + ".max_obstacle_height").as_double();
   combination_method_ = node->get_parameter(name_ + ".combination_method").as_int();
-  
+
   size_z_ = node->declare_parameter(name_ + ".z_voxels", 16);
   origin_z_ = node->declare_parameter(name_ + ".origin_z", 16.0);
   min_obstacle_intensity_ = node->declare_parameter(name_ + ".min_obstacle_intensity", 0.1);
   max_obstacle_intensity_ = node->declare_parameter(name_ + ".max_obstacle_intensity", 2.0);
   z_resolution_ = node->declare_parameter(name_ + ".z_resolution", 0.05);
-  
   unknown_threshold_ =
     node->declare_parameter(name_ + ".unknown_threshold", 15) + (VOXEL_BITS - size_z_);
   mark_threshold_ = node->declare_parameter(name_ + ".mark_threshold", 0);
@@ -62,6 +74,8 @@ void IntensityVoxelLayer::updateFootprint(
   for (auto & i : transformed_footprint_) {
     touch(i.x, i.y, min_x, min_y, max_x, max_y);
   }
+
+  setConvexPolygonCost(transformed_footprint_, nav2_costmap_2d::FREE_SPACE);
 }
 
 void IntensityVoxelLayer::matchSize()
@@ -73,7 +87,6 @@ void IntensityVoxelLayer::matchSize()
 void IntensityVoxelLayer::reset()
 {
   ObstacleLayer::reset();
-  // 仅在完全重置时调用，这里保持原样即可
   resetMaps();
 }
 
@@ -92,14 +105,9 @@ void IntensityVoxelLayer::updateBounds(
     updateOrigin(robot_x - getSizeInMetersX() / 2, robot_y - getSizeInMetersY() / 2);
   }
 
-  // !!! CRITICAL OPTIMIZATION !!!
-  // 1. 禁用全局 Costmap 重置: 防止地图闪烁和动态障碍物立即消失。
-  resetMaps(); 
-
-  // 2. 启用 Voxel Grid 重置: 确保每一帧的体素统计是独立的，
-  //    防止旧的噪声计数累积导致误报。
+  // reset maps each iteration
+  resetMaps();
   voxel_grid_.reset(); 
-
   // if not enabled, stop here
   if (!enabled_) {
     return;
@@ -108,20 +116,15 @@ void IntensityVoxelLayer::updateBounds(
   // get the maximum sized window required to operate
   useExtraBounds(min_x, min_y, max_x, max_y);
 
+  // get the marking observations
   bool current = true;
   std::vector<Observation> observations;
-  std::vector<Observation> clearing_observations;
-
-  // 1. Clearing (清除): 优先执行光线追踪清除
-  current = getClearingObservations(clearing_observations) && current;
-  for (const auto & obs : clearing_observations) {
-    raytraceFreespace(obs, min_x, min_y, max_x, max_y);
-  }
-
-  // 2. Marking (标记): 获取需要标记的观测数据
   current = getMarkingObservations(observations) && current;
+
+  // update the global current status
   current_ = current;
 
+  // place the new obstacles into a priority queue... each with a priority of zero to begin with
   for (const auto & obs : observations) {
     double sq_obstacle_max_range = obs.obstacle_max_range_ * obs.obstacle_max_range_;
     double sq_obstacle_min_range = obs.obstacle_min_range_ * obs.obstacle_min_range_;
@@ -130,29 +133,30 @@ void IntensityVoxelLayer::updateBounds(
     sensor_msgs::PointCloud2ConstIterator<float> it_y(*obs.cloud_, "y");
     sensor_msgs::PointCloud2ConstIterator<float> it_z(*obs.cloud_, "z");
     sensor_msgs::PointCloud2ConstIterator<float> it_i(*obs.cloud_, "intensity");
-
     for (; it_x != it_x.end(); ++it_x, ++it_y, ++it_z, ++it_i) {
       double px = *it_x, py = *it_y, pz = *it_z;
 
-      // Height check
+      // if the obstacle is too low/high, we won't add it
       if (pz < min_obstacle_height_ || pz > max_obstacle_height_) {
         continue;
       }
 
-      // Intensity check
+      // if the intensity is not in the range we want, we won't add it
       if (*it_i < min_obstacle_intensity_ || *it_i > max_obstacle_intensity_) {
         continue;
       }
 
+      // compute the squared distance from the hitpoint to the pointcloud's origin
       double sq_dist = (px - obs.origin_.x) * (px - obs.origin_.x) +
                        (py - obs.origin_.y) * (py - obs.origin_.y) +
                        (pz - obs.origin_.z) * (pz - obs.origin_.z);
 
-      // Range check
+      // if the point is far/close enough away... we won't consider it
       if (sq_dist <= sq_obstacle_min_range || sq_dist >= sq_obstacle_max_range) {
         continue;
       }
 
+      // now we need to compute the map coordinates for the observation
       unsigned int mx, my, mz;
       if (pz < origin_z_) {
         if (!worldToMap3D(px, py, origin_z_, mx, my, mz)) {
@@ -162,9 +166,10 @@ void IntensityVoxelLayer::updateBounds(
         continue;
       }
 
-      // Mark voxel and potentially update costmap
+      // mark the cell in the voxel grid and check if we should also mark it in the costmap
       if (voxel_grid_.markVoxelInMap(mx, my, mz, mark_threshold_)) {
         unsigned int index = getIndex(mx, my);
+
         costmap_[index] = LETHAL_OBSTACLE;
         touch(static_cast<double>(px), static_cast<double>(py), min_x, min_y, max_x, max_y);
       }
@@ -197,10 +202,12 @@ void IntensityVoxelLayer::updateBounds(
 
 void IntensityVoxelLayer::updateOrigin(double new_origin_x, double new_origin_y)
 {
+  // project the new origin into the grid
   int cell_ox, cell_oy;
   cell_ox = static_cast<int>((new_origin_x - origin_x_) / resolution_);
   cell_oy = static_cast<int>((new_origin_y - origin_y_) / resolution_);
 
+  // update the origin with the appropriate world coordinates
   origin_x_ = origin_x_ + cell_ox * resolution_;
   origin_y_ = origin_y_ + cell_oy * resolution_;
 }

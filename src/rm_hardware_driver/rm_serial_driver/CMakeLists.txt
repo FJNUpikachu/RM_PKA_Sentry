@@ -19,9 +19,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 
-# ── 内嵌 wjwwood/serial 源码（无需系统安装，无需 find_package(serial)） ────────
-# 头文件位于 include/serial/
-# 源文件位于 src/serial/
+# ── 内嵌 wjwwood/serial 源码 ──────────────────────────────────────────────────
 set(SERIAL_SRCS
   src/serial/serial.cc
   src/serial/impl/unix.cc
@@ -32,17 +30,18 @@ set(SERIAL_SRCS
 add_library(${PROJECT_NAME}_lib SHARED
   src/uart_node.cpp
   src/uart_node_tool.cpp
-  src/uart_protocol.cpp
+  # ── 协议层（每个机器人类型一个 .cpp） ──────────────────────────────────────
+  src/protocol/sentry_protocol.cpp
+  src/protocol/infantry_protocol.cpp
   ${SERIAL_SRCS}
 )
 
 target_include_directories(${PROJECT_NAME}_lib PUBLIC
-  # 同一个 include/ 目录同时包含 serial/ 和 rm_serial_driver/ 两个子目录
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
 
-# Linux 下 serial 库依赖 rt（POSIX 实时扩展）和 pthread
+# Linux 下 serial 库依赖 rt 和 pthread
 if(UNIX AND NOT APPLE)
   target_link_libraries(${PROJECT_NAME}_lib rt pthread)
 endif()
