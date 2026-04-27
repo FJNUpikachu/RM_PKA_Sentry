@@ -26,7 +26,7 @@ void BackUpFreeSpace::onConfigure()
   }
 
   nav2_util::declare_parameter_if_not_declared(node, "global_frame", rclcpp::ParameterValue("map"));
-  nav2_util::declare_parameter_if_not_declared(node, "max_radius", rclcpp::ParameterValue(1.0));
+  nav2_util::declare_parameter_if_not_declared(node, "max_radius", rclcpp::ParameterValue(0.3));
   nav2_util::declare_parameter_if_not_declared(
     node, "service_name", rclcpp::ParameterValue("local_costmap/get_costmap"));
   nav2_util::declare_parameter_if_not_declared(node, "visualize", rclcpp::ParameterValue(false));

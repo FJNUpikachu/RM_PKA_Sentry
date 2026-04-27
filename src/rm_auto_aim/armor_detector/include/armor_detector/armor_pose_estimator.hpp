@@ -1,64 +1,88 @@
-// Copyright (C) FYT Vision Group. All rights reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-#ifndef ARMOR_DETECTOR_ARMOR_POSE_ESTIMATOR_HPP_
-#define ARMOR_DETECTOR_ARMOR_POSE_ESTIMATOR_HPP_
+#ifndef ARMOR_DETECTOR_POSE_ESTIMATOR_HPP_
+#define ARMOR_DETECTOR_POSE_ESTIMATOR_HPP_
 
 // std
-#include <array>
-#include <memory>
-#include <vector>
-// OpenCV
-#include <opencv2/opencv.hpp>
-// Eigen
+#include <unordered_map>
+#include <numeric>
+// eigen
 #include <Eigen/Dense>
-// ros2
-#include <geometry_msgs/msg/pose.hpp>
-#include <rclcpp/rclcpp.hpp>
+#include <Eigen/Core>
+#include <Eigen/Geometry>
+// opencv
+#include <opencv2/opencv.hpp>
+#include <opencv2/core/eigen.hpp>
+// ros
+
 #include <sensor_msgs/msg/camera_info.hpp>
-#include <tf2_ros/buffer.h>
-// project
-#include "armor_detector/ba_solver.hpp"
-#include "rm_interfaces/msg/armor.hpp"
-#include "rm_utils/math/pnp_solver.hpp"
+// tf2
+#include <tf2/LinearMath/Quaternion.hpp>
+#include <tf2/LinearMath/Matrix3x3.hpp>
+// files
+#include <armor_detector/types.hpp>
+#include <rm_interfaces/msg/armor.hpp>
 
 namespace pka::auto_aim {
+
 class ArmorPoseEstimator {
-public:
-  explicit ArmorPoseEstimator(sensor_msgs::msg::CameraInfo::SharedPtr camera_info);
-
-  std::vector<rm_interfaces::msg::Armor> extractArmorPoses(const std::vector<Armor> &armors,
-                                               Eigen::Matrix3d R_imu_camera);
-
-  void enableBA(bool enable) { use_ba_ = enable; }
-
 private:
-  // Select the best PnP solution according to the armor's direction in image, only available for SOLVEPNP_IPPE
-  // 根据图像中装甲的方向选择最佳PnP方案，仅适用于SOLVEPNP_IPPE
-  void sortPnPResult(const Armor &armor, std::vector<cv::Mat> &rvecs,
-                     std::vector<cv::Mat> &tvecs) const;
+    // cam info
+    cv::Mat camera_matrix_;
+    Eigen::Matrix3d camera_matrix_eigen_;
+    cv::Mat dist_coeffs_;
 
-  // Convert a rotation matrix to RPY
-  // 将旋转矩阵转换为RPY
-  static Eigen::Vector3d rotationMatrixToRPY(const Eigen::Matrix3d &R);
+    // transforms
+    Eigen::Matrix3d R_camera2gimbal_;
+    Eigen::Matrix3d R_gimbal2odom_;
 
-  bool use_ba_;
+    // obj points map
+    std::unordered_map<ArmorType, std::vector<cv::Point3f>> obj_points_map_;
 
-  Eigen::Matrix3d R_gimbal_camera_;
+    // calculate the dist to center
+    float cal2CenterDist(const cv::Point2f& image_point);
 
-  std::unique_ptr<BaSolver> ba_solver_;
-  std::unique_ptr<PnPSolver> pnp_solver_;
+    // tool func
+    Eigen::Matrix3d calculateAsumMatrix(double yaw, double pitch);
+    Eigen::Vector3d rotationMatrixToRPY(const Eigen::Matrix3d &R);
+    Eigen::Quaterniond rpy2Quaternion(const Eigen::Vector3d& rpy);
+    Eigen::Matrix3d rpy2RotationMatrix(const Eigen::Vector3d& rpy);
+    double trisectionSearch(const Armor& armor, double l, double r, double eps);
+    double shortest_angular_distance(double angle);
+
+    // core
+    void optimizeYaw(Armor& armor, double yaw_opt_inclined);
+    double calculateReprojectionError(const Armor& armor, double yaw);
+    double calculateReprojectionError(const std::vector<cv::Point2f> &image_points,
+                                      const cv::Mat &rvec,
+                                      const cv::Mat &tvec,
+                                      const ArmorType &coord_frame_name) const noexcept;
+    bool solvePnP(
+        Armor& armor,
+        const std::vector<cv::Point3f>& object_points,
+        cv::Mat& rvec,
+        cv::Mat& tvec,
+        cv::SolvePnPMethod solutions = cv::SOLVEPNP_IPPE
+    );
+    double SJTU_cost(
+        const std::vector<cv::Point2f> & cv_refs, const std::vector<cv::Point2f> & cv_pts,
+        const double & inclined) const;
+
+public:
+    ArmorPoseEstimator() = delete;
+    ArmorPoseEstimator(const sensor_msgs::msg::CameraInfo::SharedPtr camera_info);
+
+    std::vector<rm_interfaces::msg::Armor> doPoseExtract(std::vector<Armor>& armors);
+
+    void updateTransforms(const Eigen::Matrix3d& R_camera2gimbal, const Eigen::Matrix3d& R_gimbal2odom);
+
+    // options
+    struct Option {
+        bool enable_optimize_yaw;
+        double inclined;
+        double search_range;
+    };
+    Option option;
 };
-} // namespace pka::auto_aim
-#endif // ARMOR_POSE_ESTIMATOR_HPP_
+
+}
+
+#endif

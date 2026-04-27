@@ -23,10 +23,6 @@ int main(int argc, char ** argv)
   BT::RosNodeParams params_update_msg;
   params_update_msg.nh = std::make_shared<rclcpp::Node>("update_msg");
 
-  BT::RosNodeParams params_robot_control;
-  params_robot_control.nh = std::make_shared<rclcpp::Node>("robot_control");
-  params_robot_control.default_port_value = "robot_control";
-
   BT::RosNodeParams params_send_goal;
   params_send_goal.nh = std::make_shared<rclcpp::Node>("send_goal");
   params_send_goal.default_port_value = "goal_pose";
@@ -34,10 +30,6 @@ int main(int argc, char ** argv)
     BT::RosNodeParams params_pub_nav2_goal;
   params_pub_nav2_goal.nh = std::make_shared<rclcpp::Node>("pub_nav2_goal");
   params_pub_nav2_goal.default_port_value = "goal_pose";
-
-  BT::RosNodeParams params_can_fire;
-  params_can_fire.nh = std::make_shared<rclcpp::Node>("can_fire");
-  params_can_fire.default_port_value = "can_fire";
 
   BT::RosNodeParams params_calculate_attack_pose;
   params_calculate_attack_pose.nh = std::make_shared<rclcpp::Node>("calculate_attack_pose");
@@ -47,33 +39,35 @@ int main(int argc, char ** argv)
   params_send_nav2_goal.nh = std::make_shared<rclcpp::Node>("send_nav2_goal");
   params_send_nav2_goal.default_port_value = "navigate_to_pose";
 
+  // ★ 新增：为 PoseSwitch 创建并传入 ROS Node 句柄
+  BT::RosNodeParams params_pose_switch;
+  params_pose_switch.nh = std::make_shared<rclcpp::Node>("pose_switch_node");
+
+
   // clang-format off
   const std::vector<std::string> msg_update_plugin_libs = {
-    "sub_all_robot_hp",
     "sub_robot_status",
     "sub_game_status",
     "sub_armors",
-    "sub_decision_num",
     "sub_rfid_status",
+    "sub_tower_status",
     "sub_global_costmap",
     "sub_target",
   };
 
   const std::vector<std::string> bt_plugin_libs = {
     "rate_controller",
-    "decision_switch",
     "is_game_time",
     "is_status_ok",
-    "is_detect_enemy",
     "is_attacked",
-    "is_friend_ok",
     "is_outpost_ok",
+    "can_outpost_revive",
+    "is_outpost_rfid",
+    "is_battle_status",
     "is_rfid_detected",
     "is_rfid_not_detected",
-    "get_current_location",
     "move_around",
     "print_message",
-    "check_goal_reached",
     "is_status_best",
     "is_status_middle",
     "is_status_bad",
@@ -94,13 +88,11 @@ int main(int argc, char ** argv)
 
   RegisterRosNode(factory, BT::SharedLibrary::getOSName("pub_nav2_goal"), params_pub_nav2_goal);
 
-  RegisterRosNode(factory, BT::SharedLibrary::getOSName("robot_control"), params_robot_control);
-
-  RegisterRosNode(factory, BT::SharedLibrary::getOSName("can_fire"), params_can_fire);
-
   RegisterRosNode(factory, BT::SharedLibrary::getOSName("calculate_attack_pose"), params_calculate_attack_pose);
 
   RegisterRosNode(factory, BT::SharedLibrary::getOSName("send_nav2_goal"), params_send_nav2_goal);
+
+  RegisterRosNode(factory, BT::SharedLibrary::getOSName("pose_switch"), params_pose_switch);
 
   auto tree = factory.createTreeFromFile(bt_xml_path);
 

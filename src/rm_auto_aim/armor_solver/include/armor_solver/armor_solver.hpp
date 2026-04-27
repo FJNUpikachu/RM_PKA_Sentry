@@ -34,6 +34,7 @@
 #include "rm_utils/math/manual_compensator.hpp"
 // 引入兵种枚举，供 isOnTarget 查询装甲板大小
 #include "armor_solver/armor_tracker.hpp"
+#include "armor_solver/outpost_solver.hpp"
 
 namespace pka::auto_aim {
 
@@ -63,6 +64,16 @@ public:
   enum State { TRACKING_ARMOR = 0, TRACKING_CENTER = 1 } state;
 
   std::vector<std::pair<double, double>> getTrajectory() const noexcept;
+
+  // -------------------------------------------------------
+  // 分组调试开关（由 armor_solver_node 从 yaml 注入）
+  // debug_solver: 弹道、装甲板选择、开火判断、yaw/pitch 解算
+  // -------------------------------------------------------
+  bool debug_solver{false};
+
+  /// Outpost parameters injected by armor_solver_node.
+  /// Used to apply single-plate fire constraint for outpost armors_num==1.
+  OutpostParams outpost_params_{};
 
 private:
   // Get the armor positions from the target robot

@@ -1,4 +1,0 @@
-【记录RMUL后的改动】
-20260402
-改了选板 火控 yaw和pitch在solver的补偿
-多加了robotype 区分大小装甲板

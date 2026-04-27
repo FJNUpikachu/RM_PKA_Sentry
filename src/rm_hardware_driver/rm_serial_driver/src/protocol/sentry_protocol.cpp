@@ -15,6 +15,9 @@ std::string SentryProtocol::pack(const rm_interfaces::msg::SentrySerialSendData 
   float_to_bytes(data.linear_x,  &buf[14]);
   float_to_bytes(data.linear_y,  &buf[18]);
   float_to_bytes(data.angular_z, &buf[22]);
+
+  buf[26] = static_cast<char>(data.pose_status);
+  
   // [26-29] reserved: already '\0'
   buf[30] = '\x00';   // 校验位（预留）
   buf[31] = static_cast<char>(PROTOCOL_FRAME_TAIL);
@@ -48,6 +51,21 @@ bool SentryProtocol::unpack(
   msg.current_hp = static_cast<uint16_t>(
     (static_cast<uint8_t>(raw[21])) |
     (static_cast<uint8_t>(raw[22]) << 8));
+  
+
+  msg.base_hp = static_cast<uint16_t>(
+    (static_cast<uint8_t>(raw[23])) |
+    (static_cast<uint8_t>(raw[24]) << 8));
+  
+  msg.outpost_hp = static_cast<uint16_t>(
+    (static_cast<uint8_t>(raw[25])) |
+    (static_cast<uint8_t>(raw[26]) << 8));
+
+  msg.is_battling = static_cast<uint8_t>(raw[27]);
+
+  msg.friendly_outpost_gain_point = static_cast<uint8_t>(raw[28]);
+
+  msg.stage_remain_time = static_cast<uint8_t>(raw[29]);
 
   // [23-29] reserved, [30] 校验位（暂不校验）
   return true;

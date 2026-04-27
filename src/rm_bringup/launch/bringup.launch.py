@@ -9,7 +9,8 @@ def generate_launch_description():
 
     from launch_ros.actions import ComposableNodeContainer, Node, PushRosNamespace
     from launch_ros.descriptions import ComposableNode
-    from launch.actions import TimerAction
+    from launch.actions import TimerAction, ExecuteProcess, DeclareLaunchArgument, OpaqueFunction
+    from launch.substitutions import LaunchConfiguration, TextSubstitution
     from launch import LaunchDescription
 
     launch_params = yaml.safe_load(open(os.path.join(
@@ -28,13 +29,109 @@ def generate_launch_description():
     )
 
     def get_params(name):
-        return os.path.join(get_package_share_directory('rm_bringup'), 'config', 'node_params', '{}_params.yaml'.format(name))
+        pkg_default = os.path.join(
+            get_package_share_directory('rm_bringup'),
+            'config',
+            'node_params',
+            '{}_params.yaml'.format(name),
+        )
+        return pkg_default
 
     # 检查是否为虚拟串口模式
     virtual_serial = launch_params.get('virtual_serial', 0)
     
     # 启动列表以 robot_state_publisher 节点开始（不再使用容器）
     launch_description_list = [robot_gimbal_publisher_node]
+
+    # ------------------------------------------------------------------
+    # Optional: auto rosbag2 record all topics on startup
+    #
+    # Notes:
+    # - Uses db3 (sqlite3) by default, which RViz / ros2 bag can replay easily.
+    # - Splitting is supported via max-bag-duration (seconds). If your distro
+    #   doesn't support it, change to max-bag-size (bytes) manually.
+    # - Output directory uses HOME + timestamp, so each run is isolated.
+    # ------------------------------------------------------------------
+    enable_bag_record = LaunchConfiguration('enable_bag_record')
+    bag_root_dir = LaunchConfiguration('bag_root_dir')
+    bag_storage = LaunchConfiguration('bag_storage')
+    bag_split_duration_s = LaunchConfiguration('bag_split_duration_s')
+    bag_compression_mode = LaunchConfiguration('bag_compression_mode')
+    bag_compression_format = LaunchConfiguration('bag_compression_format')
+
+    launch_description_list.extend([
+        DeclareLaunchArgument(
+            'enable_bag_record',
+            default_value=TextSubstitution(text='true'),
+            description='Auto start ros2 bag record -a when bringup starts.'
+        ),
+        DeclareLaunchArgument(
+            'bag_root_dir',
+            default_value=TextSubstitution(text='${HOME}/rosbags/rm_bringup'),
+            description='Root directory to store bag recordings.'
+        ),
+        DeclareLaunchArgument(
+            'bag_storage',
+            default_value=TextSubstitution(text='sqlite3'),
+            description='rosbag2 storage plugin. Use sqlite3 for .db3.'
+        ),
+        DeclareLaunchArgument(
+            'bag_split_duration_s',
+            default_value=TextSubstitution(text='300'),
+            description='Split bag file every N seconds (0 disables splitting).'
+        ),
+        DeclareLaunchArgument(
+            'bag_compression_mode',
+            default_value=TextSubstitution(text=''),
+            description='Optional: rosbag2 compression mode (e.g. file). Empty disables.'
+        ),
+        DeclareLaunchArgument(
+            'bag_compression_format',
+            default_value=TextSubstitution(text='zstd'),
+            description='Optional: rosbag2 compression format (e.g. zstd).'
+        ),
+    ])
+
+    def _make_bag_record_action(context, *args, **kwargs):
+        enabled = enable_bag_record.perform(context).lower() in ('1', 'true', 'yes', 'on')
+        if not enabled:
+            return []
+
+        root_dir = bag_root_dir.perform(context)
+        storage = bag_storage.perform(context)
+        split_s = bag_split_duration_s.perform(context)
+        comp_mode = bag_compression_mode.perform(context).strip()
+        comp_fmt = bag_compression_format.perform(context).strip()
+
+        # Expand ${HOME} and ~ in a bash-safe way
+        # Each run writes to: <root_dir>/<YYYYMMDD_HHMMSS>/
+        bash_cmd = (
+            'set -euo pipefail; '
+            f'ROOT="{root_dir}"; '
+            'ROOT="${ROOT/${HOME}/$HOME}"; '
+            'ROOT="${ROOT/#\\~/$HOME}"; '
+            'TS="$(date +%Y%m%d_%H%M%S)"; '
+            'OUT="$ROOT/$TS"; '
+            'mkdir -p "$OUT"; '
+            f'ARGS=(ros2 bag record -a --storage "{storage}" -o "$OUT"); '
+            f'SPLIT="{split_s}"; '
+            'if [ "$SPLIT" != "0" ]; then ARGS+=("--max-bag-duration" "$SPLIT"); fi; '
+            f'MODE="{comp_mode}"; '
+            f'FMT="{comp_fmt}"; '
+            'if [ -n "$MODE" ]; then ARGS+=("--compression-mode" "$MODE" "--compression-format" "$FMT"); fi; '
+            'echo "[rm_bringup] rosbag2 recording to: $OUT"; '
+            'exec "${ARGS[@]}"'
+        )
+
+        return [
+            ExecuteProcess(
+                cmd=['bash', '-lc', bash_cmd],
+                output='both',
+                emulate_tty=True,
+            )
+        ]
+
+    launch_description_list.append(OpaqueFunction(function=_make_bag_record_action))
     
     # 如果不是虚拟串口模式，则启动所有视觉节点
     if virtual_serial != 1:

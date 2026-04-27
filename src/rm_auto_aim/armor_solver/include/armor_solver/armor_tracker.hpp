@@ -36,6 +36,7 @@
 #include "rm_interfaces/msg/target.hpp"
 #include "rm_utils/math/extended_kalman_filter.hpp"
 #include "armor_solver/motion_model.hpp"
+#include "armor_solver/outpost_solver.hpp"
 
 namespace pka::auto_aim {
 
@@ -47,7 +48,6 @@ namespace pka::auto_aim {
 //   "3" → INFANTRY_3   小装甲板
 //   "4" → INFANTRY_4   小装甲板
 //   "5" → SENTRY_5     小装甲板
-//   "outpost" → OUTPOST 小装甲板
 //   "base"    → BASE    大装甲板
 // -------------------------------------------------------
 enum class RobotType {
@@ -77,13 +77,6 @@ inline RobotType robotTypeFromId(const std::string &id) {
 // 英雄(1) 和 基地(base) 使用大装甲板，其余兵种使用小装甲板
 inline bool isLargeArmor(RobotType type) {
   return type == RobotType::HERO_1 || type == RobotType::BASE;
-}
-
-// 兵种 → 该机器人携带的装甲板数量
-// 前哨站 3 块，其余正常机器人 4 块
-inline int armorCount(RobotType type) {
-  if (type == RobotType::OUTPOST) return 3;
-  return 4;
 }
 
 // -------------------------------------------------------
@@ -116,8 +109,15 @@ public:
     TEMP_LOST,
   } tracker_state;
 
-  // 创建一个ekf类
+  // 地面兵种 EKF（10 维，地面兵种专用，前哨站不使用）
   std::unique_ptr<RobotStateEKF> ekf;
+
+  // 前哨站专用 EKF（6-D，纯旋转模型；地面兵种不使用）
+  // 由 armor_solver_node 构造时创建并注入
+  std::unique_ptr<OutpostStateEKF> outpost_ekf;
+
+  // 前哨站三板积累缓冲区（DETECTING 阶段使用）
+  OutpostPlateBuffer outpost_plate_buffer_;
 
   int tracking_thres;  // frame
   int lost_thres;      // second
@@ -166,6 +166,63 @@ public:
   double vel_clamp_linear_max{3.0};  // 线速度上限 (m/s)
   double vel_clamp_yaw_max{20.0};    // 角速度上限 (rad/s)，须 > 最大陀螺转速
 
+  // -------------------------------------------------------
+  // 分组调试开关（由 armor_solver_node 从 yaml 注入）
+  // debug_tracker: tracker 匹配、状态机转移、装甲板跳跃
+  // debug_ekf:     EKF 测量、状态更新、速度限幅
+  // -------------------------------------------------------
+  bool debug_tracker{false};
+  bool debug_ekf{false};
+
+  // -------------------------------------------------------
+  // EKF 状态钳位参数（用于防止发散/异常收敛）
+  // 说明：
+  // - ground: 10-D [.., v_yaw(7), r(8), d_zc(9)]
+  // - outpost:11-D [.., v_yaw(7), r(8), d_zc(9), d_za(10)]
+  // -------------------------------------------------------
+  bool ground_state_clamp_enable{true};
+  double ground_radius_min{0.18};
+  double ground_radius_max{0.35};
+  double ground_d_zc_min{-0.35};
+  double ground_d_zc_max{0.35};
+  double ground_v_yaw_min{-20.0};
+  double ground_v_yaw_max{20.0};
+
+  bool outpost_state_clamp_enable{true};
+  double outpost_radius_min{0.18};
+  double outpost_radius_max{0.40};
+  double outpost_d_zc_min{-0.35};
+  double outpost_d_zc_max{0.35};
+  double outpost_d_za_min{0.03};
+  double outpost_d_za_max{0.30};
+  double outpost_v_yaw_min{-20.0};
+  double outpost_v_yaw_max{20.0};
+  // 前哨站固定旋转目标常见：中心线速度应接近 0
+  double outpost_v_xyz_max{0.20};
+
+  /// 前哨站几何与门控参数（由 armor_solver_node 从 yaml 注入）
+  OutpostParams outpost_cfg_{};
+
+  // 设置 OUTPOST 专用 tracker 参数（与地面兵种分开）
+  void setOutpostTrackerGates(const double max_match_distance, const double max_match_yaw_diff) noexcept
+  {
+    outpost_max_match_distance_ = max_match_distance;
+    outpost_max_match_yaw_diff_ = max_match_yaw_diff;
+  }
+
+  /// 按当前跟踪兵种类型更新 EKF 的预测函数 dt（分发到对应的 EKF）
+  /// - 前哨站 → outpost_ekf（OutpostPredict，6-D，CONSTANT_ROTATION，不传 MotionModel）
+  /// - 地面兵种 → ekf（Predict，10-D）
+  void setEKFDt(double dt, MotionModel model = MotionModel::CONSTANT_VEL_ROT) noexcept
+  {
+    if (tracked_robot_type == RobotType::OUTPOST && outpost_ekf) {
+      // 前哨站固定使用 CONSTANT_ROTATION（纯旋转，无线速度），dt 是唯一参数
+      outpost_ekf->setPredictFunc(OutpostPredict{dt});
+    } else if (ekf) {
+      ekf->setPredictFunc(Predict{dt, model});
+    }
+  }
+
 private:
   void initEKF(const Armor &a) noexcept;
 
@@ -173,16 +230,18 @@ private:
 
   // 对 state 中的速度分量 (v_x, v_y, v_z, v_yaw) 做硬限幅
   void clampVelocity(Eigen::VectorXd &state) const noexcept;
+  void clampTargetState(bool is_outpost) noexcept;
 
   double orientationToYaw(const geometry_msgs::msg::Quaternion &q) noexcept;
 
   static Eigen::Vector3d getArmorPositionFromState(const Eigen::VectorXd &x) noexcept;
 
-  // 根据当前 tracked_id 更新 tracked_robot_type 和 tracked_armors_num
-  void updateTrackedType() noexcept;
-
   double max_match_distance_;
   double max_match_yaw_diff_;
+
+  // OUTPOST 专用匹配阈值（与地面兵种分开；由 armor_solver_node 从 yaml 注入）
+  double outpost_max_match_distance_{0.25};
+  double outpost_max_match_yaw_diff_{1.2};
 
   int detect_count_;
   int lost_count_;

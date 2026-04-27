@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="Untitled">
+    <ReactiveSequence>
+      <SubRobotStatus topic_name="robot_status"
+                      robot_status="{robot_status}"/>
+      <SubRfidStatus topic_name="rfid_status"
+                     rfid_status="{rfid_status}"/>
+      <SubGameStatus topic_name="game_status"
+                     game_status="{game_status}"/>
+      <SubTowerStatus topic_name="tower_status"
+                      tower_status="{tower_status}"/>
+      <WhileDoElse>
+        <IsOutpostRfid message="{rfid_status}"/>
+        <PoseSwitch Defend="1"
+                    Attack="0"
+                    Run="0"/>
+        <PoseSwitch Defend="0"
+                    Attack="0"
+                    Run="1"/>
+      </WhileDoElse>
+    </ReactiveSequence>
+  </BehaviorTree>
+
+  <!-- Description of Node Models (used by Groot) -->
+  <TreeNodesModel>
+    <Action ID="IsOutpostRfid"
+            editable="true">
+      <input_port name="message"
+                  default="{rfid_status}"/>
+    </Action>
+    <Action ID="PoseSwitch"
+            editable="true">
+      <input_port name="Defend"
+                  default="0"/>
+      <input_port name="Attack"
+                  default="0"/>
+      <input_port name="Run"
+                  default="1"/>
+    </Action>
+    <Action ID="SubGameStatus"
+            editable="true">
+      <input_port name="topic_name"
+                  default="game_status"/>
+      <output_port name="game_status"
+                   default="{game_status}"/>
+    </Action>
+    <Action ID="SubRfidStatus"
+            editable="true">
+      <input_port name="topic_name"
+                  default="rfid_status"/>
+      <output_port name="rfid_status"
+                   default="{rfid_status}"/>
+    </Action>
+    <Action ID="SubRobotStatus"
+            editable="true">
+      <input_port name="topic_name"
+                  default="robot_status"/>
+      <output_port name="robot_status"
+                   default="{robot_status}"/>
+    </Action>
+    <Action ID="SubTowerStatus"
+            editable="true">
+      <input_port name="topic_name"
+                  default="tower_status"/>
+      <output_port name="tower_status"
+                   default="{tower_status}"/>
+    </Action>
+  </TreeNodesModel>
+
+</root>

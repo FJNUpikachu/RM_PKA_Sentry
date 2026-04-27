@@ -37,6 +37,9 @@ enum class MotionModel {
 };
 
 // X_N: state dimension 状态维度, Z_N: measurement dimension 测量维度
+// ── 地面兵种使用 10 维状态（原始定义，不做修改）──────────────────────────
+// x = [xc, vx, yc, vy, zc, vz, yaw, v_yaw, r, d_zc]
+// 前哨站使用独立的 11 维 EKF（见 outpost_solver.hpp OutpostPredict/OutpostMeasure）
 constexpr int X_N = 10, Z_N = 4;
 
 // 预测数据结构体
@@ -69,7 +72,7 @@ struct Predict {
     x[6]:该时刻的yaw
     x[7]:该时刻的v_yaw
     x[8]:r
-    x[9]:d_za
+    x[9]:d_zc
     */
 
     if (model == MotionModel::CONSTANT_VEL_ROT || model == MotionModel::CONSTANT_VELOCITY) 
@@ -111,10 +114,7 @@ struct Predict {
   MotionModel model;
 };
 
-
-
-
-// 观测结构体
+// 观测结构体（地面兵种，始终对 slot-0 建模，不含前哨站 slot 偏移）
 struct Measure {
 
   // 初始化模板函数operator()
@@ -126,7 +126,7 @@ struct Measure {
   z[3]:该时刻的yaw
   */
   template <typename T>
-  void operator()(const T x[Z_N], T z[Z_N]) 
+  void operator()(const T x[X_N], T z[Z_N]) 
   {
     z[0] = x[0] - ceres::cos(x[6]) * x[8];
     z[1] = x[2] - ceres::sin(x[6]) * x[8];

@@ -41,101 +41,230 @@
 * `armor.max_large_center_distance` (`double`, default: 6.4) - 大装甲板最大中心距离长宽比
 * `armor.max_angle` (`double`, default: 35.0) - 装甲板最大倾斜角度
 
+### 位姿解算思路与调参说明
 
-## Detector
-装甲板识别器
+#### 参数
 
-### preprocessImage
-预处理
+* `optimize_yaw` (`bool`, default: true) - 是否开启Yaw角优化
+* `search_range` (`double`, default: 80.0) - 迭代的角度范围
+* `yaw_offset_inclined` (`double`, default: 5.0) - 与原位姿误差惩罚代价（越大惩罚越重）
 
-| ![](docs/raw.png) | ![](docs/hsv_bin.png) | ![](docs/gray_bin.png) |
-| :---------------: | :-------------------: | :--------------------: |
-|       原图        |    通过颜色二值化     |     通过灰度二值化     |
+#### 思路
 
-由于一般工业相机的动态范围不够大，导致若要能够清晰分辨装甲板的数字，得到的相机图像中灯条中心就会过曝，灯条中心的像素点的值往往都是 R=B。根据颜色信息来进行二值化效果不佳，因此此处选择了直接通过灰度图进行二值化，将灯条的颜色判断放到后续处理中。
+基于上海交通大学2023年于青工会上的分享，与实际在代码测试过程中的体验，发现由于图像像素的误差，在实际位姿为±10多度的时候会发生yaw的正负跳变，对于
+后续通过建立运动方程解决小陀螺问题产生了巨大影响。
+由于在RM中描述装甲板姿态的3个自由度(DoFs)有两个是固定的，分别为roll与pitch，故为解决这个问题，较好的方法是通过降低自由度，
+在一定范围内改变在相机系下相同tvec的装甲板的yaw，并进行重投影，通过各种方式比对与实际检测结果的误差，选择误差最小的yaw值并更新。
 
-### findLights
-寻找灯条
+重投影代价函数：
 
-通过 findContours 得到轮廓，再通过 minAreaRect 获得最小外接矩形，对其进行长宽比和倾斜角度的判断，可以高效的筛除形状不满足的亮斑。
+```cpp
+// 基于欧氏距离的代价函数，采用平方和综合求误差，精度更高
+double ArmorPoseEstimator::calculateReprojectionError(const Armor& armor, double yaw) {
+    // reprojected points
+    std::vector<cv::Point2f> reprojected_points(4);
 
-判断灯条颜色这里采用了对轮廓内的的R/B值求和，判断两和的的大小的方法，若 `sum_r > sum_b` 则认为是红色灯条，反之则认为是蓝色灯条。
+    // set obj points
+    const auto& obj_points = armor.type == ArmorType::SMALL ? 
+        this->obj_points_map_[ArmorType::SMALL] : this->obj_points_map_[ArmorType::LARGE];
 
-| ![](docs/red.png) | ![](docs/blue.png) |
-| :---------------: | :----------------: |
-| 提取出的红色灯条  |  提取出的蓝色灯条  |
+    // tvec
+    const auto& t_armor2camera = armor.xyz_in_camera;
+    cv::Vec3d tvec(t_armor2camera[0], t_armor2camera[1], t_armor2camera[2]);
 
-### matchLights
-配对灯条
+    // rvec
+    double pitch = armor.number == "outpost" ? 
+        -15.0 / 180.0 * CV_PI : 15.0 / 180.0 * CV_PI;
+    auto R_armor2odom = this->calculateAsumMatrix(yaw, pitch);
+    Eigen::Matrix3d R_armor2camera =
+        this->R_camera2gimbal_.transpose() * this->R_gimbal2odom_.transpose() * R_armor2odom;
+    cv::Mat rvec, rmat;
+    cv::eigen2cv(R_armor2camera, rmat);
+    cv::Rodrigues(rmat, rvec);
 
-根据 `detect_color` 选择对应颜色的灯条进行两两配对，首先筛除掉两条灯条中间包含另一个灯条的情况，然后根据两灯条的长度之比、两灯条中心的距离、配对出装甲板的倾斜角度来筛选掉条件不满足的结果，得到形状符合装甲板特征的灯条配对。
+    // reproject
+    cv::projectPoints(obj_points, rvec, tvec, this->camera_matrix_, this->dist_coeffs_, 
+        reprojected_points);
 
-## NumberClassifier
-数字分类器
+    // calculate error
+    double error = 0.0f;
+    for (int i = 0; i < 4; i++) {
+        auto d = armor.landmarks()[i] - reprojected_points[i];
+        error += d.x * d.x + d.y * d.y;
+    }
 
-### extractNumbers
-提取数字
+    // error = SJTU_cost(reprojected_points, armor.landmarks(), 35.0f / 180.0f * CV_PI);
 
-| ![](docs/num_raw.png) | ![](docs/num_warp.png) | ![](docs/num_roi.png) | ![](docs/num_bin.png) |
-| :-------------------: | :--------------------: | :-------------------: | :-------------------: |
-|         原图          |        透视变换        |         取ROI         |        二值化         |
+    return error;
+}
+```
 
-将每条灯条上下的角点拉伸到装甲板的上下边缘作为待变换点，进行透视变换，再对变换后的图像取ROI。考虑到数字图案实质上就是黑色背景+白色图案，所以此处使用了大津法进行二值化。
+旧的代码中亦有类似尝试解决该问题的做法，其函数尝试通过cv::solvePnPGenerics()方法来获取在某种情况下PnP的多解，然后进行重投影与检测值比对，选择
+重投影误差最小的值作为pnp的位姿。该做法解出的yaw大致方向是正确的，也就是说不会再出现正负yaw跳变的情况。
 
-### Classify
-分类
+虽然解决了yaw角的正负跳变，但是考虑到基于6DoFs下的PnP解算，当装甲板偏离检测角度时，即当装甲板本身的yaw旋转到检测器能识别出该装甲板的极限yaw
+时，此时解算出的yaw角的绝对值通常比实际值的绝对值要小，也就是说越远对角度的变化越不敏感。该点通过这一方法是无法解决的。
 
-我们使用LeNet-5网络结构进行数字分类，同时在训练过程中加入了大量的椒盐噪声，有利于提高暗环境下的识别准确率
+首先最常见的做法为，直接通过cv::solvePnP()函数解出当前最优的PnP，然后直接按照上述方式从云台yaw开始进行多次迭代，直到找出最优yaw，
+但是该方法通常迭代次数过多，且同样会产生未知跳变，可能是迭代角度不合理导致。于是打算回归原来的思路，对旧的多解PnP函数进行重写。打算获取到
+大致的位姿后再通过降自由度重投影精修获得较为准确的位姿。
 
-网络结构：
+重写后的solvePnP函数：
 
-![](docs/model.svg)
+```cpp
+bool ArmorPoseEstimator::solvePnP(
+    Armor& armor,
+    const std::vector<cv::Point3f>& object_points,
+    cv::Mat& rvec,
+    cv::Mat& tvec,
+    cv::SolvePnPMethod solution
+) {
+    std::vector<cv::Mat> rvecs;
+    std::vector<cv::Mat> tvecs;
 
-效果图：
+    int res = cv::solvePnPGeneric(
+        object_points,
+        armor.landmarks(),
+        this->camera_matrix_,
+        this->dist_coeffs_,
+        rvecs,
+        tvecs,
+        false,
+        solution
+    );
 
-![](docs/classify.png)
+    if (res <= 0 || rvecs.empty() || tvecs.empty()) {
+        return false;
+    }
 
-## 角点矫正
+    if (res == 1 || rvecs.size() == 1 || tvecs.size() == 1) {
+        rvec = rvecs[0];
+        tvec = tvecs[0];
+        return true;
+    }
 
-在原版rm_vision中，使用旋转矩形的上顶点作为灯条角点，这种方法很受二值化图像的影响，当给不同的二值化阈值或者环境光照不均匀时，识别到的角点位置会发生变化，如图旋转矩形顶点1和2。这会导致角点实际坐标与types.hpp中定义的物体坐标不对应，影响到PnP的准确性。
+    constexpr double PROJECT_ERR_THRES = 3.0;
+    constexpr double ROLL_JUDGE = 10.0 * M_PI / 180.0;
 
-| ![](docs/origin1.png) | ![](docs/origin2.png) | ![](docs/pca2.png) | ![](docs/pca1.png) |
-| :-------------------: | :--------------------: | :-------------------: | :-------------------: |
-|         旋转矩形顶点1          |       旋转矩形顶点2        |         PCA1         |        PCA2         |
+    cv::Mat& rvec1 = rvecs[0];
+    cv::Mat& tvec1 = tvecs[0];
+    cv::Mat& rvec2 = rvecs[1];
+    cv::Mat& tvec2 = tvecs[1];
 
-为了解决这个问题，我们使用PCA方法对灯条的角点进行矫正，先利用[主成分分析](https://docs.opencv.org/4.x/d1/dee/tutorial_introduction_to_pca.html)(Principal Component Analysis, PCA)方法获取灯条的对称轴，然后根据沿着对称轴方向寻找上下两个亮度变化最大的点（通常是图PCA2中那样的明暗交界处），作为灯条的角点。
+    cv::Mat R1_cv, R2_cv;
+    cv::Rodrigues(rvec1, R1_cv);
+    cv::Rodrigues(rvec2, R2_cv);
 
-如图PCA1和PCA2所示，这种方法获得的角点在不同光照下表现出一致性，可以提高PnP的准确性。
+    Eigen::Matrix3d R1, R2;
+    cv::cv2eigen(R1_cv, R1);
+    cv::cv2eigen(R2_cv, R2);
 
-## BA优化
+    auto rpy1 = this->rotationMatrixToRPY(this->R_camera2gimbal_ * R1);
+    auto rpy2 = this->rotationMatrixToRPY(this->R_camera2gimbal_ * R2);
 
-![](docs/BA.png)
+    auto armor_type = armor.type == ArmorType::SMALL ? ArmorType::SMALL : ArmorType::LARGE;
+    double error1 = this->calculateReprojectionError(armor.landmarks(), rvec1, tvec1, armor_type);
+    double error2 = this->calculateReprojectionError(armor.landmarks(), rvec2, tvec2, armor_type);
 
-<!-- 根据RoboMaster机器人制作规范，非平衡机器人在平地上，每块装甲板相对地面坐标系的姿态角应为Roll=0，Pitch=15°，Yaw=$\theta$，其中只有Yaw角度是未知的。可以根据这个特征求取装甲板的Yaw角度，参考上海交通大学2023年全国赛青工会上的展示。
+    bool roll_pass1 = std::abs(rpy1[0]) < ROLL_JUDGE;
+    bool roll_pass2 = std::abs(rpy2[0]) < ROLL_JUDGE;
 
-我们使用BA优化的方式来求取Yaw角度，BA（光束法平差，Bundle Adjustment）优化是一种特殊的最小二乘问题，其通过最小化重投影误差来求取相机位姿。
+    if (!roll_pass1 && !roll_pass2) {
+        return false;
+    }
+    if (roll_pass1 && !roll_pass2) {
+        rvec = rvec1;
+        tvec = tvec1;
+        return true;
+    }
+    if (!roll_pass1 && roll_pass2) {
+        rvec = rvec2;
+        tvec = tvec2;
+        return true;
+    }
 
-假设装甲板Yaw角度为$\theta$，相机系下装甲板位姿为$(R^{camera}_{armor},t^{camera}_{armor})$，IMU系下相机姿态为$R^{imu}_{camera}$，相机内参为$K$，装甲板第$i$个角点在装甲板坐标系下为$P^{armor}_i$
+    if (error2 / error1 > PROJECT_ERR_THRES) {
+        rvec = rvec1;
+        tvec = tvec1;
+        return true;
+    }
+    if (error1 / error2 > PROJECT_ERR_THRES) {
+        rvec = rvec2;
+        tvec = tvec2;
+        return true;
+    }
 
-则易得$R^{camera}_{armor}$为$\theta$的一元函数值
-$$
-R^{camera}_{armor} = {R^{imu}_{camera}}^T ·R^{imu}_{armor}=R^{camera}_{imu}·R(Z,\theta)·R(Y,15°)·R(X,0)=f(\theta)
-$$
-装甲板角点在图像中的未归一化投影坐标为：
-$$
-P^{img}_i=K·(R^{camera}_{armor}·P^{armor}_i+t^{camera}_{armor})
-$$
-其中$t^{camera}_{armor}$可用PnP的结果
+    double l_angle = std::atan2(armor.left_light.axis.y, armor.left_light.axis.x) * 180.0 / M_PI;
+    double r_angle = std::atan2(armor.right_light.axis.y, armor.right_light.axis.x) * 180.0 / M_PI;
+    double angle = (l_angle + r_angle) / 2.0 + 90.0;
 
-设每个角点在图像中识别到的坐标为$P^{det}_i$，则有误差函数：
-$$
-e(\theta)=\sum^{n}_{i}||P^{det}_i-\frac{P^{img}_i}{P^{img}_i.z}||^2
-$$
-最小化该误差函数即可得到优化后的Yaw角度$\hat{\theta}$
-$$
-\hat{\theta}={argmin}_{\theta} \space e(\theta)
-$$
+    if ((angle > 0 && rpy1[2] > 0 && rpy2[2] < 0) ||
+        (angle < 0 && rpy1[2] < 0 && rpy2[2] > 0)) {
+        rvec = rvec2;
+        tvec = tvec2;
+    } else {
+        rvec = rvec1;
+        tvec = tvec1;
+    }
 
+    return true;
+}
+```
 
-可以使用各类数值优化方法，例如最速下降、高斯牛顿等方法求解，但更推荐使用一些现成的优化库，例如G2O、Ceres实现该问题的求解
- -->
+同样获取其最优值，以最优值的yaw为迭代范围的中心，准备进行迭代
+（能以原装甲板的yaw进行迭代的前提是能够确定yaw的正负号）。因此，该函数主要是对yaw的正负值
+进行规范，确保其正负值合理。
+
+于是，基于正负值合理的前提下，通过原始yaw的位姿，设置迭代初始值进行小范围的迭代精修。
+
+同时。为防止因范围设置不合理而导致的其他问题，新增代价函数
+
+```cpp
+double total_error = error + yaw_opt_inclined * yaw_diff * yaw_diff;
+```
+
+将更新后的yaw与原来的yaw的差值的平方乘以一个权重值，用以限制不合理的yaw更新。其中权重越高，yaw限制得越死
+
+最终yaw优化函数：
+
+```cpp
+// 降低自由度以pnp结果为基准优化yaw
+void ArmorPoseEstimator::optimizeYaw(Armor& armor, double yaw_opt_inclined) {
+    // 完全相信cv的多解pnp函数
+    double yaw_init = armor.rpy_in_odom[2];
+
+    double search_half = (this->option.search_range / 2.0f) * CV_PI / 180.0f;
+    double step = 0.5f * CV_PI / 180.0;
+
+    double min_error = std::numeric_limits<double>::max();
+    double best_yaw = yaw_init;
+
+    // 只做微调处理
+    for (double yaw = yaw_init - search_half; yaw <= yaw_init + search_half; yaw += step) {
+        double yaw_fixed = this->shortest_angular_distance(yaw);
+
+        double error = this->calculateReprojectionError(armor, yaw_fixed);
+
+        double yaw_diff = this->shortest_angular_distance(yaw_fixed - yaw_init);
+
+        // 权重稳定误差
+        double total_error = error + yaw_opt_inclined * yaw_diff * yaw_diff;
+
+        if (total_error < min_error) {
+            min_error = total_error;
+            best_yaw = yaw_fixed;
+        }
+    }
+
+    // PKA_INFO("armor_detector", "yaw_init={}, best_yaw={}, error={}", yaw_init, best_yaw, min_error);
+
+    armor.rpy_in_odom[2] = best_yaw;
+    Eigen::Matrix3d R_armor2camera_updated =
+        this->R_camera2gimbal_.transpose() *
+        this->R_gimbal2odom_.transpose() *
+        this->rpy2RotationMatrix(armor.rpy_in_odom);
+    armor.rpy_in_camera = this->rotationMatrixToRPY(R_armor2camera_updated);
+}
+```
+
+总结：先获取大概位姿，限制yaw正负号，再小范围降自由度重投影，结合位姿差权重综合计算误差，对PnP出来的位姿精修，最后获得较为准确的位姿。

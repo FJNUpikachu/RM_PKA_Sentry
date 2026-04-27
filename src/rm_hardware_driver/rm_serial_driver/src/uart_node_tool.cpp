@@ -9,6 +9,7 @@
 #include "rm_interfaces/msg/game_status.hpp"
 #include "rm_interfaces/msg/rfid_status.hpp"
 #include "rm_interfaces/msg/robot_status.hpp"
+#include "rm_interfaces/msg/tower_status.hpp"
 
 #include <thread>
 #include <chrono>
@@ -52,6 +53,18 @@ void UARTNodeTool::cmd_vel_callback(
       "[sub/cmd_vel] vx={:.4f} vy={:.4f} wz={:.4f} (scale={})",
       node->cached_linear_x_, node->cached_linear_y_,
       node->cached_angular_z_, scale);
+  }
+}
+
+// 1. 在顶部实现回调函数
+void UARTNodeTool::pose_status_callback(
+  UARTNode * node,
+  const rm_interfaces::msg::PoseStatus::SharedPtr msg)
+{
+  node->cached_pose_status_ = msg->pose_status;
+
+  if (node->debug_) {
+    PKA_DEBUG("serial_node", "[sub/PoseStatus] val={}", msg->pose_status);
   }
 }
 
@@ -222,18 +235,30 @@ void UARTNodeTool::publish_judge_msgs(
   {
     rm_interfaces::msg::GameStatus gs;
     gs.game_progress = recv_msg.game_progress;
+    gs.stage_remain_time = recv_msg.stage_remain_time;
     node->game_status_pub_->publish(gs);
   }
   {
     rm_interfaces::msg::RfidStatus rs;
     rs.friendly_supply_zone_non_exchange =
       recv_msg.friendly_supply_zone_non_exchange;
+
+    rs.friendly_outpost_gain_point =
+      recv_msg.friendly_outpost_gain_point;
+
     node->rfid_status_pub_->publish(rs);
   }
   {
     rm_interfaces::msg::RobotStatus rbs;
     rbs.current_hp = recv_msg.current_hp;
+    rbs.is_battling = recv_msg.is_battling;
     node->robot_status_pub_->publish(rbs);
+  }
+  {
+    rm_interfaces::msg::TowerStatus ts;
+    ts.base_hp = recv_msg.base_hp;
+    ts.outpost_hp = recv_msg.outpost_hp;
+    node->tower_status_pub_->publish(ts);
   }
 }
 
@@ -255,9 +280,15 @@ void UARTNodeTool::mock_recv_timer_cb(UARTNode * node)
       msg.pitch                  = node->mock_pitch_;
       msg.yaw                    = node->mock_yaw_;
       msg.chassis_imu_yaw_offset = node->mock_chassis_imu_yaw_offset_;
-      msg.game_progress                    = 0;
+      msg.game_progress                     = 0;
       msg.friendly_supply_zone_non_exchange = 0;
       msg.current_hp                        = 0;
+
+      msg.base_hp                           = 0;
+      msg.outpost_hp                        = 0;
+      msg.is_battling                       = 0;
+      msg.friendly_outpost_gain_point       = 0;
+      msg.stage_remain_time                 = 0;
 
       node->sentry_recv_pub_->publish(msg);
       node->broadcastGimbalTF(msg.roll, msg.pitch, msg.yaw,
@@ -318,6 +349,7 @@ void UARTNodeTool::send_timer_cb(UARTNode * node)
       data.linear_x    = node->cached_linear_x_;
       data.linear_y    = node->cached_linear_y_;
       data.angular_z   = node->cached_angular_z_;
+      data.pose_status = node->cached_pose_status_;
       do_send_sentry(node, data);
       break;
     }
@@ -403,7 +435,14 @@ void UARTNodeTool::recv_timer_cb(UARTNode * node)
               recv_msg.chassis_imu_yaw_offset,
               recv_msg.game_progress,
               recv_msg.friendly_supply_zone_non_exchange,
-              recv_msg.current_hp);
+              recv_msg.current_hp,
+              recv_msg.base_hp,
+              recv_msg.outpost_hp,
+              recv_msg.is_battling,
+              recv_msg.friendly_outpost_gain_point,
+              recv_msg.stage_remain_time
+              
+              );
             PKA_DEBUG("serial_node", "[recv/sentry raw] {}", IUARTProtocol::format_hex(buf));
           }
           break;

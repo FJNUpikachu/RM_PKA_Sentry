@@ -4,6 +4,7 @@
 #include "rm_serial_driver/uart_node.hpp"
 #include "rm_serial_driver/error_codes.hpp"
 #include "rm_interfaces/msg/gimbal_cmd.hpp"
+#include "rm_interfaces/msg/pose_status.hpp"
 #include <geometry_msgs/msg/twist.hpp>
 
 #include <atomic>
@@ -40,6 +41,10 @@ public:
   static void do_send_infantry(
     UARTNode * node,
     const rm_interfaces::msg::InfantrySerialSendData & data);
+
+  static void pose_status_callback(
+    UARTNode * node,
+    const rm_interfaces::msg::PoseStatus::SharedPtr msg);
 
   // ── 裁判系统消息发布辅助（仅哨兵） ───────────────────────────────────────
   static void publish_judge_msgs(

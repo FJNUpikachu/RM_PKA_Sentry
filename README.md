@@ -428,7 +428,7 @@ ros2 run rqt_tf_tree rqt_tf_tree
 ```bash
 git clone https://github.com/FJNUpikachu/RM_PKA_Sentry.git
 git add .
-git commit -m "启动！"
+git commit -m "RMUC启动！"
 git push origin main
 ```
 ```bash

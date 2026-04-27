@@ -37,6 +37,7 @@
 // project
 #include "armor_solver/armor_solver.hpp"
 #include "armor_solver/armor_tracker.hpp"
+#include "armor_solver/outpost_solver.hpp"
 #include "rm_interfaces/msg/armors.hpp"
 #include "rm_interfaces/msg/measurement.hpp"
 #include "rm_interfaces/msg/target.hpp"
@@ -64,9 +65,27 @@ private:
   
   bool debug_mode_;
 
+  // -------------------------------------------------------
+  // 分组调试开关（可在 yaml 中独立控制）
+  // debug_tracker: tracker 匹配、状态机、装甲板跳跃
+  // debug_ekf:     EKF 测量输入、状态更新、速度限幅
+  // debug_solver:  弹道、装甲板选择、开火判断、yaw/pitch 解算
+  // debug_filter:  距离/高度过滤日志
+  // debug_outpost: 前哨 outpost_solver 内 PKA_DEBUG
+  // -------------------------------------------------------
+  bool debug_tracker_;
+  bool debug_ekf_;
+  bool debug_solver_;
+  bool debug_filter_;
+  bool debug_outpost_;
+
   // Maximum distance to track an armor (meters)
   // 超过此距离的装甲板将被直接忽略，不进行跟踪和解算
   double max_armor_distance_;
+
+  // 前哨站（几何参数 + 瞄准模式）
+  OutpostParams outpost_params_;
+  OutpostMode outpost_mode_{OutpostMode::FUSION};
 
   // Heartbeat
   HeartBeatPublisher::SharedPtr heartbeat_;
@@ -78,9 +97,15 @@ private:
 
   // Armor tracker
   // 装甲板跟踪器
-  double s2qx_, s2qy_, s2qz_, s2qyaw_, s2qr_, s2qd_zc_;
+  double s2qx_, s2qy_, s2qz_, s2qyaw_, s2qr_, s2qd_zc_, s2qd_za_;
   double r_x_, r_y_, r_z_, r_yaw_;
+  // 前哨站 6-D EKF 过程噪声（d_zc_/d_za_ 已移除，新模型无这两个状态维度）
+  double outpost_s2qx_, outpost_s2qy_, outpost_s2qz_, outpost_s2qyaw_, outpost_s2qr_;
+  double outpost_r_x_, outpost_r_y_, outpost_r_z_, outpost_r_yaw_;
+  int outpost_motion_model_{1};
   double lost_time_thres_;
+  int outpost_tracking_thres_{0};
+  double outpost_lost_time_thres_{0.0};
   std::unique_ptr<Tracker> tracker_;
 
   // Armor Solver

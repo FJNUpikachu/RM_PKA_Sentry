@@ -90,6 +90,7 @@ void UARTNode::init_parameters()
   cmd_vel_linear_scale_  = declare_parameter("cmd_vel_linear_scale",   0.5);
   gimbal_cmd_topic_      = declare_parameter("gimbal_cmd_topic",       "armor_solver/cmd_gimbal");
   cmd_vel_topic_         = declare_parameter("cmd_vel_topic",          "cmd_vel");
+  pose_status_topic_     = declare_parameter("pose_status_topic", "PoseStatus");
   target_frame_          = declare_parameter("target_frame",           "odom");
 
   // ── SetMode 服务名（默认与 armor_detector 的服务名一致）──────────────────
@@ -209,6 +210,14 @@ void UARTNode::init_subscriber()
         UARTNodeTool::cmd_vel_callback(this, msg);
       });
     PKA_INFO("serial_node", "Subscribed to cmd_vel: '{}' (sentry only)", cmd_vel_topic_);
+
+  if (!pose_status_topic_.empty()) {
+    pose_status_sub_ = create_subscription<rm_interfaces::msg::PoseStatus>(
+      pose_status_topic_, 10,
+      [this](const rm_interfaces::msg::PoseStatus::SharedPtr msg) {
+        UARTNodeTool::pose_status_callback(this, msg);
+      });
+    PKA_INFO("serial_node", "Subscribed to pose_status: '{}'", pose_status_topic_);
   }
 }
 
@@ -234,8 +243,10 @@ void UARTNode::init_publisher()
         "/rfid_status",  10);
       robot_status_pub_ = create_publisher<rm_interfaces::msg::RobotStatus>(
         "/robot_status", 10);
+      tower_status_pub_ = create_publisher<rm_interfaces::msg::TowerStatus>(
+        "/tower_status", 10);
       PKA_INFO("serial_node",
-        "Publishers: serial/receive(sentry), game_status, rfid_status, robot_status");
+        "Publishers: serial/receive(sentry), game_status, rfid_status, robot_status,tower_status");
       break;
 
     case RobotType::INFANTRY:

@@ -1,38 +1,37 @@
-// #include "rm_behavior_tree/plugins/condition/is_outpost_ok.hpp"
+#include "rm_behavior_tree/plugins/condition/is_outpost_ok.hpp"
+#include <rm_interfaces/msg/detail/tower_status__struct.hpp>
 
-// #include <iostream>
+namespace rm_behavior_tree
+{
 
-// namespace rm_behavior_tree
-// {
+IsOutpostOkAction::IsOutpostOkAction(const std::string & name, const BT::NodeConfig & config)
+: BT::SimpleConditionNode(name, std::bind(&IsOutpostOkAction::checkOutpostStatus, this), config)
+{
+}
 
-// IsOutpostOKAction::IsOutpostOKAction(const std::string & name, const BT::NodeConfig & config)
-// : BT::SimpleConditionNode(name, std::bind(&IsOutpostOKAction::checkRobotStatus, this), config)
-// {
-// }
+BT::NodeStatus IsOutpostOkAction::checkOutpostStatus()
+{
+  // 获取输入端口绑定的状态消息
+  auto msg = getInput<rm_interfaces::msg::TowerStatus>("message");
 
-// BT::NodeStatus IsOutpostOKAction::checkRobotStatus()
-// {
-//   int hp_threshold = 0;
-//   int outpost_hp = 0;
-//   auto all_robot_hp_msg = getInput<rm_decision_interfaces::msg::AllRobotHP>("all_robot_hp");
-//   auto robot_status_msg = getInput<rm_decision_interfaces::msg::RobotStatus>("robot_status");
-//   getInput("hp_threshold", hp_threshold);
+  // 如果未获取到消息，视为失败
+  if (!msg) {
+    return BT::NodeStatus::FAILURE;
+  }
 
-//   if (!all_robot_hp_msg || !robot_status_msg) {
-//     return BT::NodeStatus::FAILURE;
-//   }
+  // 判断条件：前哨站血量大于0时，返回SUCCESS，否则返回FAILURE
+  if (msg->outpost_hp > 0) {
+    return BT::NodeStatus::SUCCESS;
+  } else {
+    return BT::NodeStatus::FAILURE;
+  }
+}
 
-//   outpost_hp = (robot_status_msg->team_color == TeamColor::RED) ? all_robot_hp_msg->red_outpost_hp
-//                                                                 : all_robot_hp_msg->blue_outpost_hp;
-//   std::cout << "red_outpost_hp:" << outpost_hp << '\n';
+}  // namespace rm_behavior_tree
 
-//   return (outpost_hp < hp_threshold) ? BT::NodeStatus::FAILURE : BT::NodeStatus::SUCCESS;
-// }
-
-// }  // namespace rm_behavior_tree
-
-// #include "behaviortree_cpp/bt_factory.h"
-// BT_REGISTER_NODES(factory)
-// {
-//   factory.registerNodeType<rm_behavior_tree::IsOutpostOKAction>("IsOutpostOK");
-// }
+// 注册到 BehaviorTree 节点工厂中
+#include "behaviortree_cpp/bt_factory.h"
+BT_REGISTER_NODES(factory)
+{
+  factory.registerNodeType<rm_behavior_tree::IsOutpostOkAction>("IsOutpostOk");
+}

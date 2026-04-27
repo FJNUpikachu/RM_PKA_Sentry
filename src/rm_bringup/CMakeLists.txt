@@ -13,4 +13,14 @@ ament_auto_package(
   INSTALL_TO_SHARE
   launch
   config
+  scripts
+)
+
+# Install helper scripts as runnable executables: `ros2 run rm_bringup <script>`
+install(
+  PROGRAMS
+    scripts/bag_record_all.sh
+    scripts/bag_play_all.sh
+    scripts/bag_to_mp4.py
+  DESTINATION lib/${PROJECT_NAME}
 )

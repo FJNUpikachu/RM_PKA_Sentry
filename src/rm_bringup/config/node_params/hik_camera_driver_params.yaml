@@ -5,24 +5,3 @@
     camera_info_url: package://rm_bringup/config/hik_camera_info.yaml
     exposure_time: 550
     gain: 12.0
-
-    # ---- 内录参数 ----
-
-    # 是否开启内录
-    # 支持运行时动态切换：ros2 param set /camera_driver record_enable true
-    record_enable: false
-
-    # 视频保存目录
-    # 默认保存到当前用户主目录下的 recordings/，程序启动时自动创建
-    # 可改为绝对路径，例如：/media/usb/recordings
-    record_output_dir: "~/recordings"
-
-    # 输出文件名前缀
-    # 最终文件名格式：<prefix>_YYYYMMDD_HHMMSS.mp4
-    record_filename_prefix: "Vision_raw"
-
-    # 自动分段时长（单位：秒）
-    # 每隔该时间自动关闭当前文件并开启新文件，便于管理大录像
-    # 设置为 0 表示不自动分段，录制直到手动关闭
-    # 示例：300 = 每 5 分钟分一段；600 = 每 10 分钟分一段
-    record_segment_duration_s: 10

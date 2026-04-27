@@ -37,11 +37,6 @@ endfunction()
 ament_auto_add_executable(rm_behavior_tree 
     src/rm_behavior_tree.cpp
 )
-# Controllers
-ament_auto_add_library(decision_switch SHARED
-    plugins/control/decision_switch.cpp
-)
-add_target_dependencies(decision_switch)
 
 # Decorators
 ament_auto_add_library(rate_controller SHARED 
@@ -65,25 +60,20 @@ ament_auto_add_library(is_attacked SHARED
 )
 add_target_dependencies(is_attacked)
 
-ament_auto_add_library(is_friend_ok SHARED 
-    plugins/condition/is_friend_ok.cpp
-)
-add_target_dependencies(is_friend_ok)
-
 ament_auto_add_library(is_outpost_ok SHARED 
     plugins/condition/is_outpost_ok.cpp
 )
 add_target_dependencies(is_outpost_ok)
 
-ament_auto_add_library(is_detect_enemy SHARED 
-    plugins/condition/is_detect_enemy.cpp
-)
-add_target_dependencies(is_detect_enemy)
-
 ament_auto_add_library(is_rfid_detected SHARED 
     plugins/condition/is_rfid_detected.cpp
 )
 add_target_dependencies(is_rfid_detected)
+
+ament_auto_add_library(is_outpost_rfid SHARED 
+    plugins/condition/is_outpost_rfid.cpp
+)
+add_target_dependencies(is_outpost_rfid)
 
 ament_auto_add_library(is_rfid_not_detected SHARED 
     plugins/condition/is_rfid_not_detected.cpp
@@ -105,6 +95,16 @@ ament_auto_add_library(is_status_bad SHARED
 )
 add_target_dependencies(is_status_bad)
 
+ament_auto_add_library(can_outpost_revive SHARED 
+    plugins/condition/can_outpost_revive.cpp
+)
+add_target_dependencies(can_outpost_revive)
+
+ament_auto_add_library(is_battle_status SHARED 
+    plugins/condition/is_battle_status.cpp
+)
+add_target_dependencies(is_battle_status)
+
 ament_auto_add_library(is_arrived SHARED 
     plugins/condition/is_arrived.cpp
 )
@@ -116,10 +116,10 @@ ament_auto_add_library(send_goal SHARED
 )
 add_target_dependencies(send_goal)
 
-ament_auto_add_library(sub_all_robot_hp SHARED 
-    plugins/action/sub_all_robot_hp.cpp
+ament_auto_add_library(pose_switch SHARED 
+    plugins/action/pose_switch.cpp
 )
-add_target_dependencies(sub_all_robot_hp)
+add_target_dependencies(pose_switch)
 
 ament_auto_add_library(mark_arrived SHARED 
     plugins/action/mark_arrived.cpp
@@ -151,45 +151,23 @@ ament_auto_add_library(sub_target SHARED
 )
 add_target_dependencies(sub_target)
 
-ament_auto_add_library(sub_decision_num SHARED
-    plugins/action/sub_decision_num.cpp
-)
-add_target_dependencies(sub_decision_num)
-
-ament_auto_add_library(get_current_location SHARED 
-    plugins/action/get_current_location.cpp
-)
-add_target_dependencies(get_current_location)
-
-ament_auto_add_library(move_around SHARED 
-    plugins/action/move_around.cpp
-)
-add_target_dependencies(move_around)
-
-ament_auto_add_library(robot_control SHARED 
-    plugins/action/robot_control.cpp
-)
-add_target_dependencies(robot_control)
 
 ament_auto_add_library(print_message SHARED 
     plugins/action/print_message.cpp
 )
 add_target_dependencies(print_message)
 
-ament_auto_add_library(can_fire SHARED 
-    plugins/action/can_fire.cpp
-)
-add_target_dependencies(can_fire)
-
-ament_auto_add_library(check_goal_reached SHARED 
-    plugins/action/check_goal_reached.cpp
-)
-add_target_dependencies(check_goal_reached)
 
 ament_auto_add_library(sub_rfid_status SHARED 
     plugins/action/sub_rfid_status.cpp
 )
 add_target_dependencies(sub_rfid_status)
+
+ament_auto_add_library(sub_tower_status SHARED 
+    plugins/action/sub_tower_status.cpp
+)
+add_target_dependencies(sub_tower_status)
+
 
 ament_auto_add_library(pub_nav2_goal SHARED 
     plugins/action/pub_nav2_goal.cpp
@@ -205,6 +183,12 @@ ament_auto_add_library(calculate_attack_pose SHARED
     plugins/action/calculate_attack_pose.cpp
 )
 add_target_dependencies(calculate_attack_pose)
+
+ament_auto_add_library(move_around SHARED 
+    plugins/action/move_around.cpp
+)
+add_target_dependencies(move_around)
+
 
 
 ament_auto_package(

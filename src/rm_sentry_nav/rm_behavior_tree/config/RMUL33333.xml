@@ -8,13 +8,13 @@
                       robot_status="{robot_status}"/>
       <SubRfidStatus topic_name="rfid_status"
                      rfid_status="{rfid_status}"/>
-      <WhileDoElse> 
+      <WhileDoElse>
         <IsGameTime message="{game_status}"
                     game_progress="4"/>
         <WhileDoElse>
           <IsStatusBest message="{robot_status}"/>
           <SendGoal goal_pose="4.89;-3.5;0; 0;0;0;1"
-                    action_name="navigate_to_pose"/>  
+                    action_name="navigate_to_pose"/>
           <WhileDoElse>
             <IsStatusBad message="{robot_status}"/>
             <SendGoal goal_pose="0;0;0; 0;0;0;1"

@@ -139,6 +139,13 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
     throw ex;
   }
 
+  // [debug_solver] 当前云台 RPY
+  if (debug_solver) {
+    PKA_DEBUG("armor_solver",
+              "[Solver::solve] gimbal rpy: roll={:.4f} pitch={:.4f} yaw={:.4f} (rad)",
+              rpy_[0], rpy_[1], rpy_[2]);
+  }
+
   // Use flying time to approximately predict the position of target
   // 使用飞行时间大致预测目标的位置
   Eigen::Vector3d target_position(target.position.x, target.position.y, target.position.z);
@@ -152,6 +159,16 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
   target_position.z() += dt * target.velocity.z;
   target_yaw += dt * target.v_yaw;
 
+  // [debug_solver] 弹道预测详情
+  if (debug_solver) {
+    PKA_DEBUG("armor_solver",
+              "[Solver::predict] flying_time={:.4f}s dt={:.4f}s "
+              "target_pos=({:.3f},{:.3f},{:.3f}) target_yaw={:.4f} v_yaw={:.4f}",
+              flying_time, dt,
+              target_position.x(), target_position.y(), target_position.z(),
+              target_yaw, target.v_yaw);
+  }
+
   // Choose the best armor to shoot
   // 选择最好的装甲板击打
   std::vector<Eigen::Vector3d> armor_positions = getArmorPositions(
@@ -161,6 +178,16 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
   int idx = selectBestArmor(
     armor_positions, target_position, target_yaw, target.v_yaw, target.armors_num, selected_delta_angle);
   Eigen::Vector3d front_armor_pos = armor_positions.at(idx);
+
+  // [debug_solver] 装甲板选择结果
+  if (debug_solver) {
+    PKA_DEBUG("armor_solver",
+              "[Solver::selectArmor] selected_idx={} delta_angle={:.4f}rad ({:.2f}deg) "
+              "armor_pos=({:.3f},{:.3f},{:.3f}) distance={:.3f}m",
+              idx, selected_delta_angle, selected_delta_angle * 180.0 / M_PI,
+              front_armor_pos.x(), front_armor_pos.y(), front_armor_pos.z(),
+              front_armor_pos.norm());
+  }
 
   if (front_armor_pos.norm() < 0.1) {
     throw std::runtime_error("No valid armor to shoot");
@@ -217,6 +244,19 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
     bool in_dis_range = (dis < center_dis_);
     gimbal_cmd.fire_advice = in_yaw_range && in_dis_range;
 
+    // [debug_solver] center_mode 开火判断详情
+    if (debug_solver) {
+      PKA_DEBUG("armor_solver",
+                "[Solver::center_mode] v_yaw={:.3f} cmd_yaw={:.3f}deg cmd_pitch={:.3f}deg "
+                "dis={:.3f}m in_yaw={} in_dis={} fire={}",
+                target.v_yaw,
+                cmd_yaw * 180.0 / M_PI,
+                cmd_pitch * 180.0 / M_PI,
+                dis,
+                in_yaw_range, in_dis_range,
+                gimbal_cmd.fire_advice);
+    }
+
     return gimbal_cmd;
   }
 
@@ -231,6 +271,16 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
   double yaw, pitch;
   calcYawAndPitch(chosen_armor_position, rpy_, yaw, pitch);
   double distance = chosen_armor_position.norm();
+
+  // [debug_solver] 初次解算 yaw/pitch
+  if (debug_solver) {
+    PKA_DEBUG("armor_solver",
+              "[Solver::calcYawPitch] raw yaw={:.4f}rad ({:.2f}deg) pitch={:.4f}rad ({:.2f}deg) "
+              "distance={:.3f}m",
+              yaw, yaw * 180.0 / M_PI,
+              pitch, pitch * 180.0 / M_PI,
+              distance);
+  }
 
   // Initialize gimbal_cmd
   // 初始化云台指令
@@ -258,6 +308,13 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
 
       if (overflow_count_ > transfer_thresh_) {
         state = TRACKING_CENTER;
+
+        if (debug_solver) {
+          PKA_DEBUG("armor_solver",
+                    "[Solver::state] TRACKING_ARMOR -> TRACKING_CENTER "
+                    "v_yaw={:.3f} > max={:.3f} (overflow_count={})",
+                    target.v_yaw, max_tracking_v_yaw_, overflow_count_);
+        }
       }
 
       if (controller_delay_ != 0) {
@@ -278,6 +335,16 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
           throw std::runtime_error("No valid armor to shoot");
         }
         calcYawAndPitch(chosen_armor_position, rpy_, yaw, pitch);
+
+        // [debug_solver] controller_delay 补偿后的位置
+        if (debug_solver) {
+          PKA_DEBUG("armor_solver",
+                    "[Solver::TRACKING_ARMOR] ctrl_delay={:.4f}s "
+                    "armor_pos=({:.3f},{:.3f},{:.3f}) yaw={:.4f}rad pitch={:.4f}rad",
+                    controller_delay_,
+                    chosen_armor_position.x(), chosen_armor_position.y(), chosen_armor_position.z(),
+                    yaw, pitch);
+        }
       }
       break;
     }
@@ -292,12 +359,28 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
       if (overflow_count_ > transfer_thresh_) {
         state = TRACKING_ARMOR;
         overflow_count_ = 0;
+
+        if (debug_solver) {
+          PKA_DEBUG("armor_solver",
+                    "[Solver::state] TRACKING_CENTER -> TRACKING_ARMOR "
+                    "v_yaw={:.3f} < max={:.3f} (overflow_count={})",
+                    target.v_yaw, max_tracking_v_yaw_, overflow_count_);
+        }
       }
       // 瞄准中心时持续开火
       gimbal_cmd.fire_advice = true;
       // 补充缺失的瞄准中心解算，否则 yaw/pitch 停留在上一帧装甲板位置
       calcYawAndPitch(target_position, rpy_, yaw, pitch);
       gimbal_cmd.distance = target_position.norm();
+
+      // [debug_solver] TRACKING_CENTER 解算
+      if (debug_solver) {
+        PKA_DEBUG("armor_solver",
+                  "[Solver::TRACKING_CENTER] center_pos=({:.3f},{:.3f},{:.3f}) "
+                  "yaw={:.4f}rad pitch={:.4f}rad dis={:.3f}m",
+                  target_position.x(), target_position.y(), target_position.z(),
+                  yaw, pitch, gimbal_cmd.distance);
+      }
       break;
     }
   }
@@ -308,6 +391,15 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
   double pitch_offset_val = angle_offset[0] * M_PI / 180.0;
   double yaw_offset_val   = angle_offset[1] * M_PI / 180.0;
 
+  // [debug_solver] 手动分段补偿量
+  if (debug_solver) {
+    PKA_DEBUG("armor_solver",
+              "[Solver::manualComp] dist2d={:.3f}m z={:.3f}m "
+              "pitch_offset={:.4f}deg yaw_offset={:.4f}deg",
+              target_position.head(2).norm(), target_position.z(),
+              angle_offset[0], angle_offset[1]);
+  }
+
   // 叠加 yaw_offset_ / pitch_offset_（与外参解耦的机械偏差补偿）
   double cmd_pitch = pitch + pitch_offset_val + pitch_offset_ * M_PI / 180.0;
   double cmd_yaw   = angles::normalize_angle(yaw + yaw_offset_val + yaw_offset_ * M_PI / 180.0);
@@ -317,8 +409,26 @@ rm_interfaces::msg::GimbalCmd Solver::solve(const rm_interfaces::msg::Target &ta
   gimbal_cmd.yaw_diff   = (cmd_yaw   - rpy_[2]) * 180.0 / M_PI;
   gimbal_cmd.pitch_diff = (cmd_pitch - rpy_[1]) * 180.0 / M_PI;
 
+  // [debug_solver] 最终输出指令
+  if (debug_solver) {
+    PKA_DEBUG("armor_solver",
+              "[Solver::output] yaw={:.3f}deg pitch={:.3f}deg "
+              "yaw_diff={:.3f}deg pitch_diff={:.3f}deg fire={}",
+              gimbal_cmd.yaw, gimbal_cmd.pitch,
+              gimbal_cmd.yaw_diff, gimbal_cmd.pitch_diff,
+              gimbal_cmd.fire_advice);
+  }
+
+  // ── Outpost single-plate fire constraint ────────────────────────────────
+  // When using single-plate model (armors_num==1, either DETECTING fallback
+  // or permanent SINGLE_PLATE mode), apply the yaw_diff limit configured in
+  // outpost.fire_yaw_max_deg.  All constraint logic lives in outpost_solver.
+  if (isOutpostId(target.id, outpost_params_.id) && target.armors_num == 1) {
+    outpostApplySinglePlateFireConstraint(outpost_params_, &gimbal_cmd);
+  }
+
   if (gimbal_cmd.fire_advice) {
-    PKA_DEBUG("armor_solver", "Fire!");
+    //PKA_DEBUG("armor_solver", "Fire!");
   }
   return gimbal_cmd;
 }
@@ -335,7 +445,7 @@ bool Solver::isOnTarget(const double cur_yaw,
   //
   //   大装甲板：英雄(HERO_1)、基地(BASE)
   //   小装甲板：工程(ENGINEER_2)、步兵(INFANTRY_3/4)、
-  //             哨兵(SENTRY_5)、前哨站(OUTPOST)
+  //             哨兵(SENTRY_5)
   //
   // 使用 isLargeArmor() 工具函数，与 tracker 保持一致的判断逻辑
   // -------------------------------------------------------
@@ -350,17 +460,33 @@ bool Solver::isOnTarget(const double cur_yaw,
   // fire_margin_ < 1：保守（只有对准装甲板中心才开火）
   // fire_margin_ > 1：宽松（瞄偏一点也开火）
   double tolerance_rad = std::atan2(projected_half_w, distance) * fire_margin_;
-
+  
   // 钳制到 [min_fire_tolerance_rad_, max_fire_tolerance_rad_]
   // 防止近距离容差过大、远距离容差退化为零
   tolerance_rad = std::clamp(tolerance_rad, min_fire_tolerance_rad_, max_fire_tolerance_rad_);
 
   // 采用最短角进行相减，避免角度周期性导致的误判
-  bool on_target = std::abs(angles::shortest_angular_distance(cur_yaw, target_yaw)) < tolerance_rad;
+  double yaw_err = std::abs(angles::shortest_angular_distance(cur_yaw, target_yaw));
+  bool on_target = yaw_err < tolerance_rad;
 
   // 连续两帧在目标内才开火（稳定性滤波）
   bool stable      = on_target && last_on_target_;
   last_on_target_  = on_target;
+
+  // [debug_solver] 开火判断详情
+  if (debug_solver) {
+    PKA_DEBUG("armor_solver",
+              "[Solver::isOnTarget] large={} half_w={:.4f} cos={:.4f} proj_hw={:.4f} "
+              "distance={:.3f}m tolerance={:.4f}rad ({:.2f}deg) yaw_err={:.4f}rad "
+              "on_target={} last_on_target={} fire={}",
+              isLargeArmor(robot_type),
+              armor_half_w, cos_incidence, projected_half_w,
+              distance,
+              tolerance_rad, tolerance_rad * 180.0 / M_PI,
+              yaw_err,
+              on_target, last_on_target_,
+              stable);
+  }
 
   return stable;
 }
@@ -376,7 +502,12 @@ std::vector<Eigen::Vector3d> Solver::getArmorPositions(const Eigen::Vector3d &ta
   bool is_current_pair = true;
   double r = 0., target_dz = 0.;
   for (size_t i = 0; i < armors_num; i++) {
-    double temp_yaw = target_yaw + i * (2 * M_PI / armors_num);
+    if (armors_num == 3) {
+      armor_positions[i] =
+        outpostThreePlateSlotWorldPosition(target_center, target_yaw, i, r1, d_zc, d_za);
+      continue;
+    }
+    const double temp_yaw = target_yaw + static_cast<double>(i) * (2 * M_PI / armors_num);
     if (armors_num == 4) {
       r = is_current_pair ? r1 : r2;
       target_dz = d_zc + (is_current_pair ? 0 : d_za);
@@ -411,6 +542,17 @@ int Solver::selectBestArmor(const std::vector<Eigen::Vector3d> &armor_positions,
     delta_angles[i] = delta;
   }
 
+  // [debug_solver] 各装甲板 delta_angle 列表
+  if (debug_solver) {
+    std::string da_str;
+    for (size_t i = 0; i < armors_num; i++) {
+      da_str += std::to_string(i) + ":" + std::to_string(delta_angles[i] * 180.0 / M_PI).substr(0, 6) + "deg ";
+    }
+    PKA_DEBUG("armor_solver",
+              "[Solver::selectArmor] alpha={:.4f}rad v_yaw={:.3f} delta_angles: {}",
+              alpha, target_v_yaw, da_str);
+  }
+
   int selected_id = 0;
 
   if (std::abs(target_v_yaw) < min_switching_v_yaw_) {
@@ -427,8 +569,21 @@ int Solver::selectBestArmor(const std::vector<Eigen::Vector3d> &armor_positions,
     if (lock_id_ >= 0 && lock_id_ < static_cast<int>(armors_num)) {
       double lock_delta = std::abs(delta_angles[lock_id_]);
       if (lock_delta < M_PI / 3 && std::abs(lock_delta - min_abs_delta) < M_PI / 6) {
+        if (debug_solver && selected_id != lock_id_) {
+          PKA_DEBUG("armor_solver",
+                    "[Solver::selectArmor] low_speed lock kept: lock_id={} "
+                    "lock_delta={:.4f}rad (would switch to {})",
+                    lock_id_, lock_delta, selected_id);
+        }
         selected_id = lock_id_;
       }
+    }
+
+    if (debug_solver) {
+      PKA_DEBUG("armor_solver",
+                "[Solver::selectArmor] low_speed selected_id={} delta={:.4f}rad ({:.2f}deg)",
+                selected_id, delta_angles[selected_id],
+                delta_angles[selected_id] * 180.0 / M_PI);
     }
   } else {
     // High speed spinning: use asymmetric coming/leaving angles
@@ -458,6 +613,12 @@ int Solver::selectBestArmor(const std::vector<Eigen::Vector3d> &armor_positions,
 
     // Fallback: if no armor in coming zone, pick closest
     if (best_score >= 1e9) {
+      if (debug_solver) {
+        PKA_DEBUG("armor_solver",
+                  "[Solver::selectArmor] high_speed fallback: no armor in coming zone, "
+                  "coming_rad={:.3f} leaving_rad={:.3f}",
+                  coming_rad, leaving_rad);
+      }
       double min_abs_delta = 1e9;
       for (size_t i = 0; i < armors_num; i++) {
         double abs_delta = std::abs(delta_angles[i]);
@@ -466,6 +627,17 @@ int Solver::selectBestArmor(const std::vector<Eigen::Vector3d> &armor_positions,
           selected_id   = static_cast<int>(i);
         }
       }
+    }
+
+    if (debug_solver) {
+      PKA_DEBUG("armor_solver",
+                "[Solver::selectArmor] high_speed selected_id={} delta={:.4f}rad ({:.2f}deg) "
+                "coming_zone=[{:.2f},{:.2f}]deg",
+                selected_id,
+                delta_angles[selected_id],
+                delta_angles[selected_id] * 180.0 / M_PI,
+                (target_v_yaw < 0 ? -leaving_angle_ : -coming_angle_),
+                (target_v_yaw < 0 ?  coming_angle_  :  leaving_angle_));
     }
   }
 

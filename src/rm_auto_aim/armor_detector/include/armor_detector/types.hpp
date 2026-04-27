@@ -222,6 +222,10 @@ struct Armor
   float confidence;
   // 分类器结果
   std::string classfication_result;
+
+  Eigen::Vector3d rpy_in_odom;
+  Eigen::Vector3d rpy_in_camera;
+  Eigen::Vector3d xyz_in_camera;
 };
 
 }  // namespace pka::auto_aim

@@ -2,10 +2,6 @@
 
 #include <chrono>
 #include <thread>
-#include <ctime>
-#include <iomanip>
-#include <sstream>
-#include <filesystem>
 
 namespace pka::hik_camera
 {
@@ -99,9 +95,6 @@ HikCameraNode::~HikCameraNode()
     PKA_INFO("rm_hik_camera_node", "Capture thread finished");
   }
 
-  // 确保录像文件已落盘
-  stopRecording();
-
   // 释放相机资源
   if (camera_handle_)
   {
@@ -142,36 +135,6 @@ void HikCameraNode::declareParameters()
   double gain = this->declare_parameter("gain", f_value.fCurValue, param_desc);
   MV_CC_SetFloatValue(camera_handle_, "Gain", gain);
   PKA_INFO("rm_hik_camera_node", "Gain: {}", gain);
-
-  // ---- 录制开关 ----
-  bool record_enable = this->declare_parameter("record_enable", false);
-  recording_enabled_ = record_enable;
-
-  // ---- 保存目录：默认存放到用户主目录下的 recordings/ ----
-  // std::filesystem::path::home_directory() 在 C++17 不可用，
-  // 使用 HOME 环境变量（Ubuntu 下始终有效）
-  std::string home_dir = "/home";
-  const char * env_home = std::getenv("HOME");
-  if (env_home != nullptr)
-  {
-    home_dir = std::string(env_home);
-  }
-  std::string default_output_dir = home_dir + "/recordings";
-
-  record_output_dir_ = this->declare_parameter("record_output_dir", default_output_dir);
-
-  // ---- 文件名前缀 ----
-  record_filename_prefix_ = this->declare_parameter("record_filename_prefix",
-                                                     std::string("Vision_raw"));
-
-  // ---- 自动分段时长（秒），0 = 不分段 ----
-  int segment_s = this->declare_parameter("record_segment_duration_s", 300); // 默认 5 分钟
-  record_segment_duration_s_ = segment_s;
-
-  PKA_INFO("rm_hik_camera_node", "Recording enabled      : {}", record_enable);
-  PKA_INFO("rm_hik_camera_node", "Recording output dir   : {}", record_output_dir_);
-  PKA_INFO("rm_hik_camera_node", "Recording filename pfx : {}", record_filename_prefix_);
-  PKA_INFO("rm_hik_camera_node", "Recording segment (s)  : {}", segment_s);
 }
 
 // ============================================================================
@@ -205,42 +168,6 @@ rcl_interfaces::msg::SetParametersResult HikCameraNode::parametersCallback(
         result.reason = "Failed to set gain, status = " + std::to_string(status);
       }
     }
-    else if (param.get_name() == "record_enable")
-    {
-      bool enable = param.as_bool();
-      if (enable && !recording_enabled_)
-      {
-        PKA_INFO("rm_hik_camera_node", "Recording enabled via parameter.");
-        {
-          // 清空时间戳缓存，重新估算帧率后再开启 VideoWriter
-          std::lock_guard<std::mutex> lock(video_writer_mutex_);
-          host_timestamps_us_.clear();
-          record_width_  = 0;
-          record_height_ = 0;
-        }
-        recording_enabled_ = true;
-      }
-      else if (!enable && recording_enabled_)
-      {
-        PKA_INFO("rm_hik_camera_node", "Recording disabled via parameter.");
-        recording_enabled_ = false;
-        stopRecording();
-      }
-    }
-    else if (param.get_name() == "record_output_dir")
-    {
-      record_output_dir_ = param.as_string();
-    }
-    else if (param.get_name() == "record_filename_prefix")
-    {
-      record_filename_prefix_ = param.as_string();
-    }
-    else if (param.get_name() == "record_segment_duration_s")
-    {
-      record_segment_duration_s_ = static_cast<int>(param.as_int());
-      PKA_INFO("rm_hik_camera_node", "Segment duration updated to {} s",
-               record_segment_duration_s_.load());
-    }
     else
     {
       result.successful = false;
@@ -249,89 +176,6 @@ rcl_interfaces::msg::SetParametersResult HikCameraNode::parametersCallback(
   }
 
   return result;
-}
-
-// ============================================================================
-// Recording helpers
-// ============================================================================
-
-double HikCameraNode::queryCameraFps()
-{
-  // 通过 MV_CC_GetFrameRate 读取相机 SDK 报告的当前帧率
-  MVCC_FLOATVALUE fps_value{};
-  int ret = MV_CC_GetFrameRate(camera_handle_, &fps_value);
-  if (MV_OK == ret && fps_value.fCurValue > 0.0f)
-  {
-    PKA_INFO("rm_hik_camera_node",
-             "SDK reported frame rate: {:.2f} fps (min={:.2f}, max={:.2f})",
-             fps_value.fCurValue, fps_value.fMin, fps_value.fMax);
-    return static_cast<double>(fps_value.fCurValue);
-  }
-  PKA_WARN("rm_hik_camera_node",
-           "MV_CC_GetFrameRate failed (ret={}), falling back to 30 fps", ret);
-  return 30.0;
-}
-
-std::string HikCameraNode::generateOutputPath() const
-{
-  // 确保输出目录存在
-  std::filesystem::create_directories(record_output_dir_);
-
-  // 文件名：<prefix>_YYYYMMDD_HHMMSS.mp4
-  auto now   = std::chrono::system_clock::now();
-  std::time_t t = std::chrono::system_clock::to_time_t(now);
-  std::tm tm_info{};
-  localtime_r(&t, &tm_info);
-
-  std::ostringstream oss;
-  oss << record_output_dir_ << "/"
-      << record_filename_prefix_ << "_"
-      << std::put_time(&tm_info, "%Y%m%d_%H%M%S")
-      << ".mp4";
-  return oss.str();
-}
-
-bool HikCameraNode::startRecording(int width, int height, double fps)
-{
-  std::lock_guard<std::mutex> lock(video_writer_mutex_);
-
-  if (video_writer_.isOpened())
-  {
-    return true;  // 已在录制中，不重复打开
-  }
-
-  std::string path = generateOutputPath();
-
-  // mp4v 编码 + MP4 容器（需 OpenCV 带 FFmpeg 支持）
-  // 如果系统 OpenCV 支持 avc1/H.264，可将 fourcc 改为 ('a','v','c','1')
-  int fourcc = cv::VideoWriter::fourcc('m', 'p', '4', 'v');
-  video_writer_.open(path, fourcc, fps, cv::Size(width, height), true);
-
-  if (!video_writer_.isOpened())
-  {
-    PKA_ERROR("rm_hik_camera_node",
-              "Failed to open VideoWriter: {} ({}x{} @ {:.1f}fps)", path, width, height, fps);
-    return false;
-  }
-
-  record_width_  = width;
-  record_height_ = height;
-  record_fps_    = fps;
-  segment_start_tp_ = std::chrono::steady_clock::now();
-
-  PKA_INFO("rm_hik_camera_node",
-           "Recording started -> {} ({}x{} @ {:.2f} fps)", path, width, height, fps);
-  return true;
-}
-
-void HikCameraNode::stopRecording()
-{
-  std::lock_guard<std::mutex> lock(video_writer_mutex_);
-  if (video_writer_.isOpened())
-  {
-    video_writer_.release();
-    PKA_INFO("rm_hik_camera_node", "Recording stopped and file saved.");
-  }
 }
 
 // ============================================================================
@@ -360,7 +204,6 @@ void HikCameraNode::captureThreadFunc()
 
       if (fail_conut_ > 5)
       {
-        stopRecording();  // 先保存已录内容
         PKA_FATAL("rm_hik_camera_node", "Camera failed!");
         rclcpp::shutdown();
       }
@@ -396,111 +239,6 @@ void HikCameraNode::captureThreadFunc()
 
     camera_info_msg_.header = image_msg_.header;
     camera_pub_.publish(image_msg_, camera_info_msg_);
-
-    // -----------------------------------------------------------------------
-    // 3. 内录逻辑
-    // -----------------------------------------------------------------------
-    if (recording_enabled_)
-    {
-      // --- 3a. 用 nHostTimeStamp（µs，主机侧打戳，与实际到达时刻对应）
-      //         维护滑动窗口，估算当前真实帧率 ---
-      const int64_t host_ts_us = out_frame.stFrameInfo.nHostTimeStamp;
-      host_timestamps_us_.push_back(host_ts_us);
-      if (static_cast<int>(host_timestamps_us_.size()) > kFpsWindow)
-      {
-        host_timestamps_us_.pop_front();
-      }
-
-      // --- 3b. 帧率稳定后，按需初始化 VideoWriter ---
-      if (!video_writer_.isOpened())
-      {
-        // 优先用 SDK API 读取帧率（更权威）；
-        // 再用时间窗口做兜底验证
-        double sdk_fps = queryCameraFps();
-
-        // 用 nHostTimeStamp 窗口做简单验证（窗口内数据够用时）
-        if (static_cast<int>(host_timestamps_us_.size()) >= kFpsWindow)
-        {
-          double ts_span_s = static_cast<double>(
-            host_timestamps_us_.back() - host_timestamps_us_.front()) * 1e-6;
-          if (ts_span_s > 0.0)
-          {
-            double measured_fps =
-              static_cast<double>(host_timestamps_us_.size() - 1) / ts_span_s;
-            PKA_INFO("rm_hik_camera_node",
-                     "Measured fps from host timestamps: {:.2f}", measured_fps);
-
-            // 如果 SDK 值与实测相差超过 20%，以实测为准
-            double diff_ratio = std::abs(measured_fps - sdk_fps) / sdk_fps;
-            if (diff_ratio > 0.20)
-            {
-              PKA_WARN("rm_hik_camera_node",
-                       "SDK fps ({:.2f}) deviates from measured ({:.2f}), using measured.",
-                       sdk_fps, measured_fps);
-              sdk_fps = measured_fps;
-            }
-          }
-        }
-
-        // 开启一个新的分段文件
-        startRecording(frame_w, frame_h, sdk_fps);
-      }
-
-      // --- 3c. 写帧 ---
-      if (video_writer_.isOpened())
-      {
-        // 分辨率变更时关闭旧文件、重新开始新分段
-        if (frame_w != record_width_ || frame_h != record_height_)
-        {
-          PKA_WARN("rm_hik_camera_node",
-                   "Resolution changed ({}x{} -> {}x{}), restarting recorder.",
-                   record_width_, record_height_, frame_w, frame_h);
-          stopRecording();
-          host_timestamps_us_.clear();
-          // 下一帧循环会重新触发 startRecording
-        }
-        else
-        {
-          // RGB → BGR（VideoWriter 内部是 BGR）
-          cv::Mat rgb_mat(frame_h, frame_w, CV_8UC3, image_msg_.data.data());
-          cv::Mat bgr_mat;
-          cv::cvtColor(rgb_mat, bgr_mat, cv::COLOR_RGB2BGR);
-
-          {
-            std::lock_guard<std::mutex> lock(video_writer_mutex_);
-            if (video_writer_.isOpened())
-            {
-              video_writer_.write(bgr_mat);
-            }
-          }
-
-          // --- 3d. 自动分段 ---
-          int seg_s = record_segment_duration_s_.load();
-          if (seg_s > 0)
-          {
-            auto elapsed = std::chrono::steady_clock::now() - segment_start_tp_;
-            if (elapsed >= std::chrono::seconds(seg_s))
-            {
-              PKA_INFO("rm_hik_camera_node",
-                       "Segment duration ({} s) reached, starting new segment.", seg_s);
-              // 关闭当前文件
-              stopRecording();
-              host_timestamps_us_.clear();
-              // 立即以当前已知帧率开启下一段，无需重新等待估算窗口
-              startRecording(frame_w, frame_h, record_fps_);
-            }
-          }
-        }
-      }
-    }
-    else
-    {
-      // 录制关闭：清空时间戳缓存，方便下次重新估算
-      if (!host_timestamps_us_.empty())
-      {
-        host_timestamps_us_.clear();
-      }
-    }
 
     MV_CC_FreeImageBuffer(camera_handle_, &out_frame);
     fail_conut_ = 0;

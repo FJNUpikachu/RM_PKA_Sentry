@@ -26,6 +26,8 @@
 #include "rm_interfaces/msg/game_status.hpp"
 #include "rm_interfaces/msg/rfid_status.hpp"
 #include "rm_interfaces/msg/robot_status.hpp"
+#include "rm_interfaces/msg/pose_status.hpp"
+#include "rm_interfaces/msg/tower_status.hpp"
 
 // ── SetMode 服务（用于通知 armor_detector 切换颜色）──────────────────────────
 #include "rm_interfaces/srv/set_mode.hpp"
@@ -79,6 +81,8 @@ private:
   rclcpp::Publisher<rm_interfaces::msg::GameStatus>::SharedPtr  game_status_pub_;
   rclcpp::Publisher<rm_interfaces::msg::RfidStatus>::SharedPtr  rfid_status_pub_;
   rclcpp::Publisher<rm_interfaces::msg::RobotStatus>::SharedPtr robot_status_pub_;
+  rclcpp::Publisher<rm_interfaces::msg::TowerStatus>::SharedPtr tower_status_pub_;
+
 
   // ── 步兵专用发布 ──────────────────────────────────────────────────────────
   rclcpp::Publisher<rm_interfaces::msg::InfantrySerialReceiveData>::SharedPtr
@@ -87,6 +91,8 @@ private:
   // ── 订阅（哨兵 mode=1 有效；步兵 cmd_vel_topic 可为空） ───────────────────
   rclcpp::Subscription<rm_interfaces::msg::GimbalCmd>::SharedPtr   gimbal_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr       cmd_vel_sub_;
+
+  rclcpp::Subscription<rm_interfaces::msg::PoseStatus>::SharedPtr pose_status_sub_;
 
   // ── SetMode 服务客户端（调用 armor_detector/set_mode）────────────────────
   rclcpp::Client<rm_interfaces::srv::SetMode>::SharedPtr set_mode_client_;
@@ -99,6 +105,7 @@ private:
   float cached_linear_x_    {0.0f};   // 仅哨兵
   float cached_linear_y_    {0.0f};   // 仅哨兵
   float cached_angular_z_   {0.0f};   // 仅哨兵
+  uint8_t cached_pose_status_ {0};
 
   // ── 上一次发送给 armor_detector 的 mode（用于变化检测）───────────────────
   // 初始值设为 255（无效值），保证第一帧必定触发服务调用
@@ -133,6 +140,8 @@ private:
   std::string gimbal_cmd_topic_;
   std::string cmd_vel_topic_;
   std::string target_frame_;
+
+  std::string pose_status_topic_;
 
   // ── set_mode 服务相关参数 ─────────────────────────────────────────────────
   // armor_detector 服务名，可通过参数覆盖
