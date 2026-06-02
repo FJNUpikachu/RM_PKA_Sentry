@@ -1,0 +1,12 @@
+/**:
+  ros__parameters:
+    camera_info_url: package://rm_bringup/config/dahua_camera_info.yaml
+    exposure_time: 6000.0
+    gain: 15.0
+    auto_white_balance: 1
+    resolution_width: 800
+    resolution_height: 600
+    offsetX: 0
+    offsetY: 0
+    Brightness: 50
+    camera_name: "narrow_stereo"

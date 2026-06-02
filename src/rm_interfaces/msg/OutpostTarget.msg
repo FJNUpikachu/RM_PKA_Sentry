@@ -1,0 +1,15 @@
+std_msgs/Header header
+bool tracking
+string id
+int32 armors_num
+geometry_msgs/Point position
+float64 yaw
+float64 v_yaw
+float64 radius
+float64 z1
+float64 z2
+float64 z3
+float64 tracked_armor_x
+float64 tracked_armor_y
+float64 tracked_armor_z
+float64 tracked_armor_yaw

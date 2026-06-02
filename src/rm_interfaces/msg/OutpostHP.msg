@@ -1,0 +1,1 @@
+uint16 outpost_hp   # 己方前哨站血量

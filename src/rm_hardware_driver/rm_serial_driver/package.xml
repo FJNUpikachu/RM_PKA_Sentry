@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>rm_serial_driver</name>
+  <version>3.0.0</version>
+  <description>
+    RoboMaster serial driver for ROS 2.
+    Uses wjwwood/serial as embedded source (include/serial + src/serial).
+    No system install of serial library required.
+  </description>
+  <maintainer email="pka@example.com">pka</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>rm_interfaces</depend>
+  <depend>rm_utils</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <!-- wjwwood/serial 以源码形式内嵌，不声明外部依赖 -->
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

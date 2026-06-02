@@ -1,0 +1,1 @@
+uint16 game_progress # 当前比赛阶段

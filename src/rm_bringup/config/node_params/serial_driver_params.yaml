@@ -1,0 +1,72 @@
+/**:
+  ros__parameters:
+    # ── 机器人类型 ────────────────────────────────────────────────────────────
+    # sentry   → 哨兵协议（32B 发 / 32B 收）
+    # infantry → 步兵协议（16B 发 / 16B 收）
+    robot_type: "sentry"
+
+    # ── 串口硬件 ────────────────────────────────────────────────────────────────
+    port_name: "/dev/ttyACM0"
+    baudrate: 115200
+
+    # ── 时间戳补偿（秒），用于 TF 时间戳偏移
+    timestamp_offset: 0.000
+
+    debug: false
+
+    # ── 串口模式 ────────────────────────────────────────────────────────────────
+    # 0 → 不开串口：mock 接收数据 + 广播 TF
+    # 1 → 真实串口：订阅 gimbal/cmd_vel/pose_status，定时发送；真实接收
+    # 2 → 虚拟发送：用下方 virtual_* 参数组包发送；真实接收仍走串口
+    serial_mode: 1
+
+    # ── TF：云台变换父坐标系（target_frame → gimbal_link）
+    target_frame: "gimbal_odom"
+
+    # ── mode=1 订阅话题（步兵可将 cmd_vel_topic 设为 "" 跳过 cmd_vel）
+    gimbal_cmd_topic: "armor_solver/cmd_gimbal"
+    cmd_vel_topic: "cmd_vel"
+    # 哨兵发送帧 pose_status 来源；设为空字符串则不订阅
+    pose_status_topic: "PoseStatus"
+    # cmd_vel 线速度缩放（仅 angular.z 不缩放）
+    cmd_vel_linear_scale: 8.0
+
+    # armor_detector SetMode 服务全名（含 namespace 时请写全）
+    set_mode_service_name: "armor_detector/set_mode"
+
+    # ── 定时频率（Hz / 秒）──────────────────────────────────────────────────────
+    send_frequency: 200.0          # mode=1 发送周期
+    read_frequency: 200.0          # mode=1,2 串口读周期
+    virtual_send_frequency: 200.0   # mode=2 虚拟发送周期
+
+    # 己方前哨站血量（独立话题，默认名 outpost_hp ，与 SentrySerialReceiveData.outpost_hp 同源）
+    outpost_hp_topic: "outpost_hp"
+
+    # ── mode=0 mock 接收 ───────────────────────────────────────────────────────
+    mock_recv_frequency: 50.0
+    mock_mode: 0
+    mock_roll: 1.2
+    mock_pitch: 0.5
+    mock_yaw: 0.3
+    mock_chassis_imu_yaw_offset: 0.7
+    mock_outpost_hp: 1300
+
+    # ── mode=2 虚拟发送 ────────────────
+    virtual_fire_advice: true
+    virtual_pitch: 13.72
+    virtual_yaw: 11.95
+    virtual_distance: 3.7
+    virtual_linear_x: 4.89
+    virtual_linear_y: 5.77
+    virtual_angular_z: -3.5
+    # 姿态：1 进攻 2 防御 3 移动
+    virtual_pose_status: 2
+
+    # ── 健康管理（mode=1,2）────────────────────────────────────────────────────
+    max_failure_count: 10
+    health_check_interval: 1.0
+    # 自动重启次数上限；设为 0 表示不限制次数
+    max_restart_attempts: 1000000
+    restart_cooldown: 2.0
+    enable_auto_restart: true
+    restart_delay: 1000            # 毫秒

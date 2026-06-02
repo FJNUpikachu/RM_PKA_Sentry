@@ -1,0 +1,1 @@
+uint8   is_battling              # 是否脱战

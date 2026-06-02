@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="Untitled">
+    <ReactiveSequence>
+      <SubCurrentHP topic_name="current_hp"
+                    current_hp="{current_hp}"/>
+      <SubGameProgress topic_name="game_progress"
+                       game_progress="{game_progress}"/>
+      <SubIsSupply topic_name="is_supply"
+                   is_supply="{is_supply}"/>
+      <SubBulletRest topic_name="bullet_rest"
+                     bullet_rest="{bullet_rest}"/>
+      <SubIsFortress topic_name="is_fortress"
+                     is_fortress="{is_fortress}"/>
+      <SubBattling topic_name="is_battling"
+                   is_battling="{is_battling}"/>
+      <SubOutpostHP topic_name="outpost_hp"
+                    outpost_hp="{outpost_hp}"/>
+      <WhileDoElse>
+        <IsGameTime message="{game_progress}"
+                    game_progress="4"/>
+        <ReactiveSequence>
+          <WhileDoElse>
+            <IsFortressDetected message="{is_fortress}"/>
+            <PoseSwitch Defend="0"
+                        Attack="1"
+                        Run="0"/>
+            <WhileDoElse>
+              <IsBattleStatus message="{is_battling}"/>
+              <PoseSwitch Defend="1"
+                          Attack="0"
+                          Run="0"/>
+              <PoseSwitch Defend="0"
+                          Attack="0"
+                          Run="1"/>
+            </WhileDoElse>
+          </WhileDoElse>
+          <WhileDoElse>
+            <AsyncSequence>
+              <AsyncFallback>
+                <IsStatusBest message="{current_hp}"/>
+                <AsyncSequence>
+                  <Inverter>
+                    <IsRfidDetected message="{is_supply}"/>
+                  </Inverter>
+                  <IsStatusMiddle message="{current_hp}"/>
+                </AsyncSequence>
+              </AsyncFallback>
+              <IsBulletRestOk message="{bullet_rest}"/>
+            </AsyncSequence>
+            <WhileDoElse>
+              <IsOutpostOk message="{outpost_hp}"/>
+              <SendGoal goal_pose="5.82;3.27;0; 0;0;0;1"
+                        action_name="navigate_to_pose"/>
+              <SendGoal goal_pose="4.4;-0.6;0; 0;0;0;1"
+                        action_name="navigate_to_pose"/>
+            </WhileDoElse>
+            <SendGoal goal_pose="-1.5;-5.74;0; 0;0;0;1"
+                      action_name="navigate_to_pose"/>
+          </WhileDoElse>
+        </ReactiveSequence>
+        <SendGoal goal_pose="0;0;0; 0;0;0;1"
+                  action_name="navigate_to_pose"/>
+      </WhileDoElse>
+    </ReactiveSequence>
+  </BehaviorTree>
+
+  <!-- Description of Node Models (used by Groot) -->
+  <TreeNodesModel>
+    <Action ID="IsBattleStatus"
+            editable="true">
+      <input_port name="message"
+                  default="{is_battling}"/>
+    </Action>
+    <Action ID="IsBulletRestOk"
+            editable="true">
+      <input_port name="message"
+                  default="{bullet_rest}"/>
+    </Action>
+    <Action ID="IsFortressDetected"
+            editable="true">
+      <input_port name="message"
+                  default="{is_fortress}"/>
+    </Action>
+    <Action ID="IsGameTime"
+            editable="true">
+      <input_port name="message"
+                  default="{game_progress}"/>
+      <input_port name="game_progress"
+                  default="4"/>
+    </Action>
+    <Action ID="IsOutpostOk"
+            editable="true">
+      <input_port name="message"
+                  default="{outpost_hp}"/>
+    </Action>
+    <Action ID="IsRfidDetected"
+            editable="true">
+      <input_port name="message"
+                  default="{is_supply}">port</input_port>
+    </Action>
+    <Action ID="IsStatusBest"
+            editable="true">
+      <input_port name="message"
+                  default="{current_hp}"/>
+    </Action>
+    <Action ID="IsStatusMiddle"
+            editable="true">
+      <input_port name="message"
+                  default="{current_hp}"/>
+    </Action>
+    <Action ID="PoseSwitch"
+            editable="true">
+      <input_port name="Defend"
+                  default="0"/>
+      <input_port name="Attack"
+                  default="0"/>
+      <input_port name="Run"
+                  default="1"/>
+    </Action>
+    <Action ID="SendGoal"
+            editable="true">
+      <input_port name="goal_pose"
+                  default="0;0;0; 0;0;0;1"/>
+      <input_port name="action_name"
+                  default="navigate_to_pose"/>
+    </Action>
+    <Action ID="SubBattling"
+            editable="true">
+      <input_port name="topic_name"
+                  default="is_battling"/>
+      <output_port name="is_battling"
+                   default="{is_battling}"/>
+    </Action>
+    <Action ID="SubBulletRest"
+            editable="true">
+      <input_port name="topic_name"/>
+      <input_port name="bullet_rest"/>
+    </Action>
+    <Action ID="SubCurrentHP"
+            editable="true">
+      <input_port name="topic_name"
+                  default="current_hp"/>
+      <output_port name="current_hp"
+                   default="{current_hp}"/>
+    </Action>
+    <Action ID="SubGameProgress"
+            editable="true">
+      <input_port name="topic_name"
+                  default="game_progress"/>
+      <output_port name="game_progress"
+                   default="{game_progress}"/>
+    </Action>
+    <Action ID="SubIsFortress"
+            editable="true">
+      <input_port name="topic_name"
+                  default="is_fortress"/>
+      <output_port name="is_fortress"
+                   default="{is_fortress}"/>
+    </Action>
+    <Action ID="SubIsSupply"
+            editable="true">
+      <input_port name="topic_name"
+                  default="is_supply"/>
+      <output_port name="is_supply"
+                   default="{is_supply}"/>
+    </Action>
+    <Action ID="SubOutpostHP"
+            editable="true">
+      <input_port name="topic_name"/>
+      <input_port name="outpost_hp"/>
+    </Action>
+  </TreeNodesModel>
+
+</root>

@@ -1,0 +1,1 @@
+uint8 pose_status       # 姿态：1进攻 2防御 3移动

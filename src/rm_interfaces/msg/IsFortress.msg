@@ -1,0 +1,1 @@
+uint8   is_fortress              # 是否刷到堡垒RFID

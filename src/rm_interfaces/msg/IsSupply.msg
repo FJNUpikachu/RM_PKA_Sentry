@@ -1,0 +1,1 @@
+uint8   is_supply                # 是否刷到基地补给区RFID

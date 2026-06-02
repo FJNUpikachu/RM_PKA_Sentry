@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4" project_name="Project">
+    <include path="src/rm_sentry_nav/rm_behavior_tree/config/RMUC1.xml"/>
+    <!-- Description of Node Models (used by Groot) -->
+    <TreeNodesModel>
+        <Action ID="IsBattleStatus" editable="true">
+            <input_port name="message" default="{is_battling}"/>
+        </Action>
+        <Action ID="IsBulletRestOk" editable="true">
+            <input_port name="message" default="{bullet_rest}"/>
+        </Action>
+        <Action ID="IsFortressDetected" editable="true">
+            <input_port name="message" default="{is_fortress}"/>
+        </Action>
+        <Action ID="IsGameTime" editable="true">
+            <input_port name="message" default="{game_progress}"/>
+            <input_port name="game_progress" default="4"/>
+        </Action>
+        <Action ID="IsOutpostOk" editable="true">
+            <input_port name="message" default="{outpost_hp}"/>
+        </Action>
+        <Action ID="IsRfidDetected" editable="true">
+            <input_port name="message" default="{is_supply}">port</input_port>
+        </Action>
+        <Action ID="IsStatusBest" editable="true">
+            <input_port name="message" default="{current_hp}"/>
+        </Action>
+        <Action ID="IsStatusMiddle" editable="true">
+            <input_port name="message" default="{current_hp}"/>
+        </Action>
+        <Action ID="PoseSwitch" editable="true">
+            <input_port name="Defend" default="0"/>
+            <input_port name="Attack" default="0"/>
+            <input_port name="Run" default="1"/>
+        </Action>
+        <Action ID="SendGoal" editable="true">
+            <input_port name="goal_pose" default="0;0;0; 0;0;0;1"/>
+            <input_port name="action_name" default="navigate_to_pose"/>
+        </Action>
+        <Action ID="SubBattling" editable="true">
+            <input_port name="topic_name" default="is_battling"/>
+            <output_port name="is_battling" default="{is_battling}"/>
+        </Action>
+        <Action ID="SubBulletRest" editable="true">
+            <input_port name="topic_name"/>
+            <input_port name="bullet_rest"/>
+        </Action>
+        <Action ID="SubCurrentHP" editable="true">
+            <input_port name="topic_name" default="current_hp"/>
+            <output_port name="current_hp" default="{current_hp}"/>
+        </Action>
+        <Action ID="SubGameProgress" editable="true">
+            <input_port name="topic_name" default="game_progress"/>
+            <output_port name="game_progress" default="{game_progress}"/>
+        </Action>
+        <Action ID="SubIsFortress" editable="true">
+            <input_port name="topic_name" default="is_fortress"/>
+            <output_port name="is_fortress" default="{is_fortress}"/>
+        </Action>
+        <Action ID="SubIsSupply" editable="true">
+            <input_port name="topic_name" default="is_supply"/>
+            <output_port name="is_supply" default="{is_supply}"/>
+        </Action>
+        <Action ID="SubOutpostHP" editable="true">
+            <input_port name="topic_name"/>
+            <input_port name="outpost_hp"/>
+        </Action>
+    </TreeNodesModel>
+</root>
